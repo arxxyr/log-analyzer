@@ -1,0 +1,204 @@
+#!/bin/bash
+
+# Master Control 日志分析脚本
+# 用途：自动从远程机器人系统下载日志并进行分析
+
+# 配置参数
+REMOTE_HOST="192.168.5.9"
+REMOTE_PORT="23"
+REMOTE_USER="firefly"
+REMOTE_LOG_DIR="/home/firefly/.ros/log"
+LOCAL_OUTPUT_DIR="output"
+ANALYZER_BIN="./master_control_analyzer"  # 编译好的二进制文件
+
+# 颜色定义
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# 打印函数
+print_info() { echo -e "${BLUE}[INFO]${NC} $1"; }
+print_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
+print_error() { echo -e "${RED}[ERROR]${NC} $1"; }
+print_warning() { echo -e "${YELLOW}[WARNING]${NC} $1"; }
+
+# 显示帮助信息
+show_help() {
+    echo "使用方法:"
+    echo "  $0                    # 自动获取并分析最新日志"
+    echo "  $0 <log_file>        # 分析指定的日志文件（本地或远程）"
+    echo "  $0 -h                # 显示此帮助信息"
+    echo ""
+    echo "示例:"
+    echo "  $0                                          # 自动模式"
+    echo "  $0 master_control_3463_1755747167392.log   # 指定文件"
+    echo ""
+    echo "配置:"
+    echo "  远程主机: $REMOTE_USER@$REMOTE_HOST:$REMOTE_PORT"
+    echo "  日志路径: $REMOTE_LOG_DIR"
+    echo "  输出目录: $LOCAL_OUTPUT_DIR"
+}
+
+# 检查分析程序
+check_analyzer() {
+    if [ ! -f "$ANALYZER_BIN" ]; then
+        print_error "分析程序未找到: $ANALYZER_BIN"
+        print_info "请确保已将编译好的二进制文件放置在当前目录"
+        exit 1
+    fi
+    
+    # 添加执行权限
+    if [ ! -x "$ANALYZER_BIN" ]; then
+        print_warning "添加执行权限..."
+        chmod +x "$ANALYZER_BIN"
+    fi
+}
+
+# 获取远程最新日志
+get_latest_remote_log() {
+    print_info "连接到远程系统..."
+    
+    LATEST_LOG=$(ssh -p $REMOTE_PORT $REMOTE_USER@$REMOTE_HOST \
+        "cd $REMOTE_LOG_DIR && ls -t master_control_*.log 2>/dev/null | head -1")
+    
+    if [ -z "$LATEST_LOG" ]; then
+        print_error "远程系统没有找到master_control日志文件"
+        exit 1
+    fi
+    
+    echo "$LATEST_LOG"
+}
+
+# 下载日志文件
+download_log() {
+    local log_file=$1
+    local remote_path="$REMOTE_LOG_DIR/$log_file"
+    
+    print_info "下载日志: $log_file"
+    
+    # 检查本地是否已存在
+    if [ -f "$log_file" ]; then
+        print_warning "本地已存在文件 $log_file，将覆盖"
+    fi
+    
+    # 下载
+    scp -P $REMOTE_PORT $REMOTE_USER@$REMOTE_HOST:$remote_path ./
+    
+    if [ $? -eq 0 ]; then
+        print_success "下载完成 ($(ls -lh $log_file | awk '{print $5}'))"
+        return 0
+    else
+        return 1
+    fi
+}
+
+# 分析日志
+analyze_log() {
+    local log_file=$1
+    
+    print_info "开始分析: $log_file"
+    
+    # 创建输出目录
+    mkdir -p $LOCAL_OUTPUT_DIR
+    
+    # 清理旧的输出
+    rm -f $LOCAL_OUTPUT_DIR/*.png $LOCAL_OUTPUT_DIR/*.csv 2>/dev/null
+    
+    # 运行分析
+    $ANALYZER_BIN --log $log_file --outdir $LOCAL_OUTPUT_DIR
+    
+    if [ $? -eq 0 ]; then
+        print_success "分析完成"
+        
+        # 统计结果
+        local csv_count=$(ls -1 $LOCAL_OUTPUT_DIR/*.csv 2>/dev/null | wc -l)
+        local png_count=$(ls -1 $LOCAL_OUTPUT_DIR/*.png 2>/dev/null | wc -l)
+        
+        echo ""
+        print_info "生成结果:"
+        echo "  CSV文件: $csv_count 个"
+        echo "  甘特图: $png_count 个"
+        echo "  输出目录: $(pwd)/$LOCAL_OUTPUT_DIR"
+        
+        # 显示部分甘特图列表
+        if [ $png_count -gt 0 ]; then
+            echo ""
+            print_info "甘特图列表 (前5个):"
+            ls -lh $LOCAL_OUTPUT_DIR/*.png | head -5 | awk '{print "  " $9 " (" $5 ")"}'
+            if [ $png_count -gt 5 ]; then
+                echo "  ... 共 $png_count 个文件"
+            fi
+        fi
+        
+        return 0
+    else
+        print_error "分析失败"
+        return 1
+    fi
+}
+
+# 主程序
+main() {
+    echo "======================================"
+    echo "   Master Control 日志分析工具"
+    echo "======================================"
+    echo ""
+    
+    # 检查分析程序
+    check_analyzer
+    
+    # 处理参数
+    if [ "$1" == "-h" ] || [ "$1" == "--help" ]; then
+        show_help
+        exit 0
+    fi
+    
+    if [ $# -eq 0 ]; then
+        # 自动模式：获取最新日志
+        print_info "自动模式：获取最新日志"
+        LOG_FILE=$(get_latest_remote_log)
+        print_success "找到最新日志: $LOG_FILE"
+        
+        if download_log "$LOG_FILE"; then
+            analyze_log "$LOG_FILE"
+        else
+            print_error "下载失败"
+            exit 1
+        fi
+        
+    else
+        # 指定文件模式
+        LOG_FILE=$1
+        
+        if [ -f "$LOG_FILE" ]; then
+            # 本地文件存在，直接分析
+            print_info "分析本地文件: $LOG_FILE"
+            analyze_log "$LOG_FILE"
+            
+        else
+            # 尝试从远程下载
+            print_info "本地未找到文件，尝试从远程下载: $LOG_FILE"
+            
+            if download_log "$LOG_FILE"; then
+                analyze_log "$LOG_FILE"
+            else
+                print_error "文件 $LOG_FILE 不存在（本地和远程都未找到）"
+                echo ""
+                show_help
+                exit 1
+            fi
+        fi
+    fi
+    
+    echo ""
+    print_success "全部完成！"
+}
+
+# 捕获错误
+set -e
+trap 'if [ $? -ne 0 ]; then print_error "执行出错"; fi' EXIT
+
+# 运行主程序
+main "$@"
