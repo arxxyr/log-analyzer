@@ -58,13 +58,14 @@ check_analyzer() {
 
 # 获取远程最新日志
 get_latest_remote_log() {
-    print_info "连接到远程系统..."
+    # 先显示提示信息（输出到stderr，不会混入返回值）
+    print_info "连接到远程系统..." >&2
     
     LATEST_LOG=$(ssh -p $REMOTE_PORT $REMOTE_USER@$REMOTE_HOST \
         "cd $REMOTE_LOG_DIR && ls -t master_control_*.log 2>/dev/null | head -1")
     
     if [ -z "$LATEST_LOG" ]; then
-        print_error "远程系统没有找到master_control日志文件"
+        print_error "远程系统没有找到master_control日志文件" >&2
         exit 1
     fi
     
@@ -159,6 +160,10 @@ main() {
         # 自动模式：获取最新日志
         print_info "自动模式：获取最新日志"
         LOG_FILE=$(get_latest_remote_log)
+        
+        # 清理LOG_FILE中可能的颜色代码
+        LOG_FILE=$(echo "$LOG_FILE" | sed 's/\x1B\[[0-9;]*m//g')
+        
         print_success "找到最新日志: $LOG_FILE"
         
         if download_log "$LOG_FILE"; then
