@@ -51,7 +51,7 @@ cargo clippy -- -W clippy::all
 
 ### 核心数据流
 1. **日志解析** (`load_log_lines`): 读取日志文件，提取带时间戳的行
-2. **轮次检测** (`detect_rounds`): 识别任务轮次边界（物体类型:0 触发新轮次）
+2. **轮次检测** (`detect_rounds`): 识别任务轮次边界
 3. **流程检测** (`detect_flows`): 解析导航和机械臂操作序列
 4. **数据构建** (`build_csv_records`): 转换为结构化记录
 5. **输出生成**: 
@@ -61,42 +61,43 @@ cargo clippy -- -W clippy::all
 ### 关键数据结构
 
 - **LogLine**: 带时间戳的日志行
-- **Round**: 任务轮次（包含开始/结束时间、姿态信息）
+- **Round**: 任务轮次（基于循环标记检测，包含开始/结束时间、姿态信息）
 - **NavigationFlow**: 导航流程（包含导航目标和关联的各类动作）
-- **ActionOperation**: 通用动作操作（支持arm/head/waist等类型，包含动作代码、标签、时间范围）
+- **ActionOperation**: 通用动作操作（支持arm/head/waist等类型，包含动作名称、代码、时间范围）
 - **CsvRecord**: 输出的结构化记录
 
-### 日志格式支持
+### 日志格式
 
-程序支持两种日志格式：
-- **旧格式**: `[timestamp] [module]: message`
-- **新格式**: `[INFO] [timestamp] [module]: message`
+程序使用新格式：`[INFO/WARN/ERROR/DEBUG] [timestamp] [module]: message`
 
 ### 日志模式匹配
 
 程序使用正则表达式匹配特定日志模式：
-- 时间戳: 支持 `[timestamp]` 和 `[INFO/WARN/ERROR/DEBUG] [timestamp]` 两种格式
-- 轮次开始: `[master_control]: 物体类型: 0`（每检测到物体类型0开始新轮次）
+- 时间戳: `[INFO/WARN/ERROR/DEBUG] [timestamp]` 格式
+- 轮次开始: `[发布日志节点]: [INFO] loop: 开始循环`
+- 轮次结束: `[发布日志节点]: [INFO] loop: 结束当前循环`
 - 姿态信息: `[master_control]: 姿态字符串: {JSON格式的姿态数据}`
 
 ### 支持的动作类型
 
 1. **导航 (Navigation)**
-   - 开始: `[navigation]: 设置目标点`
+   - 开始: `[导航]: NavAction2[NavAction2] - 开始执行`
    - 目标: `设置导航目标: pos(x,y,z), ori(x,y,z,w)`
-   - 完成: `[navigation]: onResultReceived. Done = 0`
+   - 完成: `[导航]: NavAction2[NavAction2] - 执行完成，结果:`
 
 2. **机械臂 (DoubleArmAction)**
-   - 开始: `[DoubleArmAction]: setGoal action_type_code: <代码>`
-   - 完成: `[DoubleArmAction]: <标签>: onResultReceived. Status = <状态码>`
+   - 开始: `[机械臂]: DoubleArmAction[<动作名称>] - 开始执行`
+   - 动作代码设置: `[机械臂]: DoubleArmAction setGoal action_type_code: <代码>`
+   - 结果回调: `[机械臂]: [RESULT CALLBACK] - 机械臂动作完成，状态: <状态码>`
+   - 执行完成: `[机械臂]: DoubleArmAction[<动作名称>] - 执行完成，结果: <结果>`
 
 3. **头部控制 (Head Control)**
-   - 开始: `[head_control]: 设置/开始`
-   - 完成: `[head_control]: 完成/结束/Done`
+   - 开始: `[头部控制]: HeadControlAction2[head_control] - 开始执行`
+   - 完成: `[头部控制]: HeadControlAction2[head_control] - 执行完成`
 
 4. **腰部控制 (Waist Control)**
-   - 开始: `[waist_control]: 设置/开始`
-   - 完成: `[waist_control]: 完成/结束/Done`
+   - 开始: `[腰部]: WaistAction2[WaistAction2] - 开始执行`
+   - 完成: `[腰部]: WaistAction2[WaistAction2] - 执行完成，结果:`
 
 ### 输出文件
 
@@ -111,9 +112,10 @@ cargo clippy -- -W clippy::all
 ## 注意事项
 
 1. **日志编码**: 程序会自动处理 UTF-8 编码问题，使用 lossy 转换处理无效字符
-2. **时间处理**: 
+2. **时间处理**:
    - 内部使用 Unix 时间戳（秒级精度）
    - 甘特图显示北京时间（UTC+8）
    - CSV 中的时间为相对于日志开始的秒数
-3. **性能**: 对于大型日志文件（>100MB），建议使用 release 模式构建
-4. **依赖版本**: 使用 Rust edition 2024，主要依赖包括 plotters（图表）、csv（数据导出）、regex（模式匹配）
+3. **轮次检测**: 基于循环标记（`loop: 开始循环` 和 `loop: 结束当前循环`）自动检测任务轮次
+4. **性能**: 对于大型日志文件（>100MB），建议使用 release 模式构建
+5. **依赖版本**: 使用 Rust edition 2024，主要依赖包括 plotters（图表）、csv（数据导出）、regex（模式匹配）

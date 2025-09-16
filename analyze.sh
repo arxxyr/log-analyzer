@@ -4,7 +4,7 @@
 # 用途：自动从远程机器人系统下载日志并进行分析
 
 # 配置参数
-REMOTE_HOST="192.168.5.9"
+REMOTE_HOST="192.168.4.69"
 REMOTE_PORT="23"
 REMOTE_USER="firefly"
 REMOTE_LOG_DIR="/home/firefly/.ros/log"
