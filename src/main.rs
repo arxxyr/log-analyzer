@@ -5,6 +5,7 @@ use anyhow::Result;
 use chrono::{DateTime, FixedOffset};
 use clap::Parser;
 use plotters::prelude::*;
+use plotters::style::text_anchor::{HPos, Pos, VPos};
 use regex::Regex;
 use serde::Serialize;
 
@@ -47,10 +48,17 @@ struct LogLine {
 #[derive(Debug, Clone)]
 struct Round {
     id: usize,
+    loop_number: Option<u32>, // 循环编号（如循环1、循环2等）
     start_ts: f64,
     end_ts: Option<f64>,
     pose0: Option<String>,
     pose6: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct SubStep {
+    name: String,
+    timestamp: f64,
 }
 
 #[derive(Debug, Clone)]
@@ -61,6 +69,7 @@ struct ActionOperation {
     start_ts: Option<f64>,
     end_ts: Option<f64>,
     status: String,
+    sub_steps: Vec<SubStep>, // 记录动作内部的子步骤
 }
 
 #[derive(Debug, Clone)]
@@ -70,6 +79,7 @@ struct NavigationFlow {
     nav_target_pos: Option<String>,
     nav_target_ori: Option<String>,
     nav_status: String,
+    nav_sub_steps: Vec<SubStep>, // 导航的子步骤
     round_id: usize,
     operations: Vec<ActionOperation>, // 支持所有类型的动作
 }
@@ -110,6 +120,16 @@ fn main() -> Result<()> {
     let rounds = detect_rounds(&lines, t_last)?;
     println!("Detected {} rounds", rounds.len());
 
+    // 调试输出：显示每个轮次的循环编号
+    for round in &rounds {
+        let loop_info = if let Some(loop_num) = round.loop_number {
+            format!("循环{}", loop_num)
+        } else {
+            "无循环编号".to_string()
+        };
+        println!("Round {}: {}", round.id, loop_info);
+    }
+
     // Detect navigation flows
     let flows = detect_flows(&lines, &rounds)?;
     println!("Detected {} navigation flows", flows.len());
@@ -145,8 +165,8 @@ fn main() -> Result<()> {
     // Export CSV
     export_csv(&records, &args.outdir)?;
 
-    // Generate Gantt charts
-    generate_gantt_charts(&records, &rounds, &args.outdir, t0)?;
+    // Generate Gantt charts with flows for sub-steps
+    generate_gantt_charts(&flows, &rounds, &args.outdir, t0)?;
 
     println!("Analysis complete! Output in: {}", args.outdir);
 
@@ -184,9 +204,8 @@ fn load_log_lines(log_path: &str) -> Result<Vec<LogLine>> {
 }
 
 fn detect_rounds(lines: &[LogLine], t_last: f64) -> Result<Vec<Round>> {
-    // 循环标记作为轮次边界
-    let loop_start_regex = Regex::new(r"\[发布日志节点\]:\s*\[INFO\]\s*loop:\s*开始循环")?;
-    let loop_end_regex = Regex::new(r"\[发布日志节点\]:\s*\[INFO\]\s*loop:\s*结束当前循环")?;
+    // 新的循环标记格式：循环N: 开始循环N
+    let loop_regex = Regex::new(r"\[发布日志节点\]:\s*\[INFO\]\s*循环(\d+):\s*开始循环\d+")?;
     let pose_regex = Regex::new(r"\[master_control\]:\s*姿态字符串:\s*(\{.*\})")?;
 
     let mut rounds = Vec::new();
@@ -194,32 +213,28 @@ fn detect_rounds(lines: &[LogLine], t_last: f64) -> Result<Vec<Round>> {
 
     for line in lines {
         // 检测循环开始
-        if loop_start_regex.is_match(&line.line) {
-            // 结束上一轮（如果存在且未正常结束）
+        if let Some(caps) = loop_regex.captures(&line.line) {
+            let loop_number = caps[1].parse::<u32>().ok();
+
+            // 如果当前有进行中的轮次，先结束它
             if let Some(mut round) = current {
                 if round.end_ts.is_none() {
+                    // 使用当前行时间戳作为上一轮的结束时间
                     round.end_ts = Some(line.timestamp);
                 }
                 rounds.push(round);
             }
 
-            // 开始新轮次
+            // 开始新的轮次（每个循环标记都创建一个新轮次）
             let id = rounds.len() + 1;
             current = Some(Round {
                 id,
+                loop_number,
                 start_ts: line.timestamp,
                 end_ts: None,
                 pose0: None,
                 pose6: None,
             });
-            continue;
-        }
-
-        // 检测循环结束
-        if loop_end_regex.is_match(&line.line) {
-            if let Some(ref mut round) = current {
-                round.end_ts = Some(line.timestamp);
-            }
             continue;
         }
 
@@ -262,18 +277,24 @@ fn ts_to_round_id(ts: f64, rounds: &[Round]) -> usize {
 }
 
 fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<NavigationFlow>> {
-    // 导航相关正则
-    let nav_start_regex = Regex::new(r"\[导航\]:\s*NavAction2\[NavAction2\]\s*-\s*开始执行")?;
+    // 导航相关正则 (支持 NavAction 和 NavAction2)
+    let nav_start_regex = Regex::new(r"\[导航\]:\s*NavAction2?\[NavAction2?\]\s*-\s*开始执行")?;
     let nav_target_regex = Regex::new(r"设置导航目标:\s*pos\(([^)]+)\),\s*ori\(([^)]+)\)")?;
-    let nav_end_regex = Regex::new(r"\[导航\]:\s*NavAction2\[NavAction2\]\s*-\s*执行完成，结果:")?;
+    let nav_send_regex = Regex::new(r"\[导航\]:\s*发送导航目标")?;
+    let nav_response_regex = Regex::new(r"\[导航\]:\s*\[RESPONSE CALLBACK\]\s*-\s*目标已被服务端接受")?;
+    let nav_result_regex = Regex::new(r"\[导航\]:\s*\[RESULT CALLBACK\]")?;
+    let nav_end_regex = Regex::new(r"\[导航\]:\s*NavAction2?\[NavAction2?\]\s*-\s*执行完成，结果:")?;
 
     // 机械臂相关正则
     // DoubleArmAction[动作名称] - 开始执行
-    let arm_start_regex =
-        Regex::new(r"\[机械臂\]:\s*DoubleArmAction\[([^\]]+)\]\s*-\s*开始执行")?;
+    let arm_start_regex = Regex::new(r"\[机械臂\]:\s*DoubleArmAction\[([^\]]+)\]\s*-\s*开始执行")?;
     // setGoal action_type_code
     let arm_setgoal_regex =
         Regex::new(r"\[机械臂\]:\s*DoubleArmAction\s+setGoal\s+action_type_code:\s*(\d+)")?;
+    // 发送机械臂目标
+    let arm_send_regex = Regex::new(r"\[机械臂\]:\s*发送机械臂控制目标")?;
+    // Response callback
+    let arm_response_regex = Regex::new(r"\[机械臂\]:\s*\[RESPONSE CALLBACK\]\s*-\s*目标已被服务端接受")?;
     // [RESULT CALLBACK] - 机械臂动作完成
     let arm_result_regex =
         Regex::new(r"\[机械臂\]:\s*\[RESULT CALLBACK\]\s*-\s*机械臂动作完成，状态:\s*(\d+)")?;
@@ -281,16 +302,22 @@ fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<NavigationFlo
     let arm_complete_regex =
         Regex::new(r"\[机械臂\]:\s*DoubleArmAction\[([^\]]+)\]\s*-\s*执行完成，结果:")?;
 
-    // 头部控制相关正则
+    // 头部控制相关正则 (支持 HeadControlAction 和 HeadControlAction2)
     let head_start_regex =
-        Regex::new(r"\[头部控制\]:\s*HeadControlAction2\[head_control\]\s*-\s*开始执行")?;
+        Regex::new(r"\[头部控制\]:\s*HeadControlAction2?\[head_control\]\s*-\s*开始执行")?;
+    let head_send_regex = Regex::new(r"\[头部控制\]:\s*发送头部控制目标")?;
+    let head_response_regex = Regex::new(r"\[头部控制\]:\s*\[RESPONSE CALLBACK\]\s*-\s*目标已被服务端接受")?;
+    let head_result_regex = Regex::new(r"\[头部控制\]:\s*\[RESULT CALLBACK\]\s*-\s*头部动作完成")?;
     let head_end_regex =
-        Regex::new(r"\[头部控制\]:\s*HeadControlAction2\[head_control\]\s*-\s*执行完成")?;
+        Regex::new(r"\[头部控制\]:\s*HeadControlAction2?\[head_control\]\s*-\s*执行完成")?;
 
-    // 腰部控制相关正则
-    let waist_start_regex = Regex::new(r"\[腰部\]:\s*WaistAction2\[WaistAction2\]\s*-\s*开始执行")?;
+    // 腰部控制相关正则 (支持 WaistAction 和 WaistAction2)
+    let waist_start_regex = Regex::new(r"\[腰部\]:\s*WaistAction2?\[WaistAction2?\]\s*-\s*开始执行")?;
+    let waist_send_regex = Regex::new(r"\[腰部\]:\s*发送腰部控制目标")?;
+    let waist_response_regex = Regex::new(r"\[腰部\]:\s*\[RESPONSE CALLBACK\]\s*-\s*目标已被服务端接受")?;
+    let waist_result_regex = Regex::new(r"\[腰部\]:\s*\[RESULT CALLBACK\]\s*-\s*腰部动作完成")?;
     let waist_end_regex =
-        Regex::new(r"\[腰部\]:\s*WaistAction2\[WaistAction2\]\s*-\s*执行完成，结果:")?;
+        Regex::new(r"\[腰部\]:\s*WaistAction2?\[WaistAction2?\]\s*-\s*执行完成，结果:")?;
 
     let mut flows = Vec::new();
     let mut current_flow: Option<NavigationFlow> = None;
@@ -314,6 +341,10 @@ fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<NavigationFlo
                 nav_target_pos: None,
                 nav_target_ori: None,
                 nav_status: "ok".to_string(),
+                nav_sub_steps: vec![SubStep {
+                    name: "开始执行".to_string(),
+                    timestamp: line.timestamp,
+                }],
                 round_id: ts_to_round_id(line.timestamp, rounds),
                 operations: Vec::new(),
             });
@@ -326,7 +357,44 @@ fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<NavigationFlo
                 if flow.nav_target_pos.is_none() {
                     flow.nav_target_pos = Some(caps[1].replace(' ', ""));
                     flow.nav_target_ori = Some(caps[2].replace(' ', ""));
+                    flow.nav_sub_steps.push(SubStep {
+                        name: "设置导航目标".to_string(),
+                        timestamp: line.timestamp,
+                    });
                 }
+            }
+            continue;
+        }
+
+        // 导航 - 发送导航目标
+        if nav_send_regex.is_match(&line.line) {
+            if let Some(ref mut flow) = current_flow {
+                flow.nav_sub_steps.push(SubStep {
+                    name: "发送导航目标".to_string(),
+                    timestamp: line.timestamp,
+                });
+            }
+            continue;
+        }
+
+        // 导航 - Response callback
+        if nav_response_regex.is_match(&line.line) {
+            if let Some(ref mut flow) = current_flow {
+                flow.nav_sub_steps.push(SubStep {
+                    name: "服务端接受".to_string(),
+                    timestamp: line.timestamp,
+                });
+            }
+            continue;
+        }
+
+        // 导航 - Result callback
+        if nav_result_regex.is_match(&line.line) {
+            if let Some(ref mut flow) = current_flow {
+                flow.nav_sub_steps.push(SubStep {
+                    name: "结果回调".to_string(),
+                    timestamp: line.timestamp,
+                });
             }
             continue;
         }
@@ -335,6 +403,10 @@ fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<NavigationFlo
         if nav_end_regex.is_match(&line.line) {
             if let Some(mut flow) = current_flow.take() {
                 flow.nav_end_ts = Some(line.timestamp);
+                flow.nav_sub_steps.push(SubStep {
+                    name: "执行完成".to_string(),
+                    timestamp: line.timestamp,
+                });
                 flows.push(flow);
             }
             continue;
@@ -359,10 +431,14 @@ fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<NavigationFlo
             let arm_action = ActionOperation {
                 action_type: "arm".to_string(),
                 action_code,
-                label: action_label,
+                label: action_label.clone(),
                 start_ts: Some(line.timestamp),
                 end_ts: None,
                 status: "pending".to_string(),
+                sub_steps: vec![SubStep {
+                    name: format!("开始执行[{}]", action_label),
+                    timestamp: line.timestamp,
+                }],
             };
 
             // 添加到当前流程
@@ -370,6 +446,60 @@ fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<NavigationFlo
                 flow.operations.push(arm_action);
             } else if let Some(flow) = flows.last_mut() {
                 flow.operations.push(arm_action);
+            }
+            continue;
+        }
+
+        // 机械臂 - 发送目标
+        if arm_send_regex.is_match(&line.line) {
+            // 找到最近的未完成的机械臂动作
+            if let Some(ref mut flow) = current_flow {
+                for op in flow.operations.iter_mut().rev() {
+                    if op.action_type == "arm" && op.end_ts.is_none() {
+                        op.sub_steps.push(SubStep {
+                            name: "发送目标".to_string(),
+                            timestamp: line.timestamp,
+                        });
+                        break;
+                    }
+                }
+            } else if let Some(flow) = flows.last_mut() {
+                for op in flow.operations.iter_mut().rev() {
+                    if op.action_type == "arm" && op.end_ts.is_none() {
+                        op.sub_steps.push(SubStep {
+                            name: "发送目标".to_string(),
+                            timestamp: line.timestamp,
+                        });
+                        break;
+                    }
+                }
+            }
+            continue;
+        }
+
+        // 机械臂 - Response callback
+        if arm_response_regex.is_match(&line.line) {
+            // 找到最近的未完成的机械臂动作
+            if let Some(ref mut flow) = current_flow {
+                for op in flow.operations.iter_mut().rev() {
+                    if op.action_type == "arm" && op.end_ts.is_none() {
+                        op.sub_steps.push(SubStep {
+                            name: "服务端接受".to_string(),
+                            timestamp: line.timestamp,
+                        });
+                        break;
+                    }
+                }
+            } else if let Some(flow) = flows.last_mut() {
+                for op in flow.operations.iter_mut().rev() {
+                    if op.action_type == "arm" && op.end_ts.is_none() {
+                        op.sub_steps.push(SubStep {
+                            name: "服务端接受".to_string(),
+                            timestamp: line.timestamp,
+                        });
+                        break;
+                    }
+                }
             }
             continue;
         }
@@ -382,6 +512,10 @@ fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<NavigationFlo
             if let Some(ref mut flow) = current_flow {
                 for op in flow.operations.iter_mut().rev() {
                     if op.action_type == "arm" && op.end_ts.is_none() {
+                        op.sub_steps.push(SubStep {
+                            name: format!("动作完成(状态:{})", status),
+                            timestamp: line.timestamp,
+                        });
                         op.end_ts = Some(line.timestamp);
                         op.status = if status == "0" {
                             "ok".to_string()
@@ -394,6 +528,10 @@ fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<NavigationFlo
             } else if let Some(flow) = flows.last_mut() {
                 for op in flow.operations.iter_mut().rev() {
                     if op.action_type == "arm" && op.end_ts.is_none() {
+                        op.sub_steps.push(SubStep {
+                            name: format!("动作完成(状态:{})", status),
+                            timestamp: line.timestamp,
+                        });
                         op.end_ts = Some(line.timestamp);
                         op.status = if status == "0" {
                             "ok".to_string()
@@ -409,7 +547,28 @@ fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<NavigationFlo
 
         // 机械臂动作完成 - 执行完成
         if arm_complete_regex.is_match(&line.line) {
-            // 这个日志通常在 RESULT CALLBACK 之后，不需要特别处理
+            // 找到最近的机械臂动作添加执行完成子步骤
+            if let Some(ref mut flow) = current_flow {
+                for op in flow.operations.iter_mut().rev() {
+                    if op.action_type == "arm" {
+                        op.sub_steps.push(SubStep {
+                            name: "执行完成".to_string(),
+                            timestamp: line.timestamp,
+                        });
+                        break;
+                    }
+                }
+            } else if let Some(flow) = flows.last_mut() {
+                for op in flow.operations.iter_mut().rev() {
+                    if op.action_type == "arm" {
+                        op.sub_steps.push(SubStep {
+                            name: "执行完成".to_string(),
+                            timestamp: line.timestamp,
+                        });
+                        break;
+                    }
+                }
+            }
             continue;
         }
 
@@ -422,12 +581,94 @@ fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<NavigationFlo
                 start_ts: Some(line.timestamp),
                 end_ts: None,
                 status: "pending".to_string(),
+                sub_steps: vec![SubStep {
+                    name: "开始执行".to_string(),
+                    timestamp: line.timestamp,
+                }],
             };
 
             if let Some(ref mut flow) = current_flow {
                 flow.operations.push(head_action);
             } else if let Some(flow) = flows.last_mut() {
                 flow.operations.push(head_action);
+            }
+            continue;
+        }
+
+        // 头部控制 - 发送目标
+        if head_send_regex.is_match(&line.line) {
+            if let Some(ref mut flow) = current_flow {
+                for op in flow.operations.iter_mut().rev() {
+                    if op.action_type == "head" && op.end_ts.is_none() {
+                        op.sub_steps.push(SubStep {
+                            name: "发送目标".to_string(),
+                            timestamp: line.timestamp,
+                        });
+                        break;
+                    }
+                }
+            } else if let Some(flow) = flows.last_mut() {
+                for op in flow.operations.iter_mut().rev() {
+                    if op.action_type == "head" && op.end_ts.is_none() {
+                        op.sub_steps.push(SubStep {
+                            name: "发送目标".to_string(),
+                            timestamp: line.timestamp,
+                        });
+                        break;
+                    }
+                }
+            }
+            continue;
+        }
+
+        // 头部控制 - Response callback
+        if head_response_regex.is_match(&line.line) {
+            if let Some(ref mut flow) = current_flow {
+                for op in flow.operations.iter_mut().rev() {
+                    if op.action_type == "head" && op.end_ts.is_none() {
+                        op.sub_steps.push(SubStep {
+                            name: "服务端接受".to_string(),
+                            timestamp: line.timestamp,
+                        });
+                        break;
+                    }
+                }
+            } else if let Some(flow) = flows.last_mut() {
+                for op in flow.operations.iter_mut().rev() {
+                    if op.action_type == "head" && op.end_ts.is_none() {
+                        op.sub_steps.push(SubStep {
+                            name: "服务端接受".to_string(),
+                            timestamp: line.timestamp,
+                        });
+                        break;
+                    }
+                }
+            }
+            continue;
+        }
+
+        // 头部控制 - Result callback
+        if head_result_regex.is_match(&line.line) {
+            if let Some(ref mut flow) = current_flow {
+                for op in flow.operations.iter_mut().rev() {
+                    if op.action_type == "head" && op.end_ts.is_none() {
+                        op.sub_steps.push(SubStep {
+                            name: "动作完成".to_string(),
+                            timestamp: line.timestamp,
+                        });
+                        break;
+                    }
+                }
+            } else if let Some(flow) = flows.last_mut() {
+                for op in flow.operations.iter_mut().rev() {
+                    if op.action_type == "head" && op.end_ts.is_none() {
+                        op.sub_steps.push(SubStep {
+                            name: "动作完成".to_string(),
+                            timestamp: line.timestamp,
+                        });
+                        break;
+                    }
+                }
             }
             continue;
         }
@@ -441,6 +682,10 @@ fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<NavigationFlo
                 start_ts: Some(line.timestamp),
                 end_ts: None,
                 status: "pending".to_string(),
+                sub_steps: vec![SubStep {
+                    name: "开始执行".to_string(),
+                    timestamp: line.timestamp,
+                }],
             };
 
             if let Some(ref mut flow) = current_flow {
@@ -451,6 +696,83 @@ fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<NavigationFlo
             continue;
         }
 
+        // 腰部控制 - 发送目标
+        if waist_send_regex.is_match(&line.line) {
+            if let Some(ref mut flow) = current_flow {
+                for op in flow.operations.iter_mut().rev() {
+                    if op.action_type == "waist" && op.end_ts.is_none() {
+                        op.sub_steps.push(SubStep {
+                            name: "发送目标".to_string(),
+                            timestamp: line.timestamp,
+                        });
+                        break;
+                    }
+                }
+            } else if let Some(flow) = flows.last_mut() {
+                for op in flow.operations.iter_mut().rev() {
+                    if op.action_type == "waist" && op.end_ts.is_none() {
+                        op.sub_steps.push(SubStep {
+                            name: "发送目标".to_string(),
+                            timestamp: line.timestamp,
+                        });
+                        break;
+                    }
+                }
+            }
+            continue;
+        }
+
+        // 腰部控制 - Response callback
+        if waist_response_regex.is_match(&line.line) {
+            if let Some(ref mut flow) = current_flow {
+                for op in flow.operations.iter_mut().rev() {
+                    if op.action_type == "waist" && op.end_ts.is_none() {
+                        op.sub_steps.push(SubStep {
+                            name: "服务端接受".to_string(),
+                            timestamp: line.timestamp,
+                        });
+                        break;
+                    }
+                }
+            } else if let Some(flow) = flows.last_mut() {
+                for op in flow.operations.iter_mut().rev() {
+                    if op.action_type == "waist" && op.end_ts.is_none() {
+                        op.sub_steps.push(SubStep {
+                            name: "服务端接受".to_string(),
+                            timestamp: line.timestamp,
+                        });
+                        break;
+                    }
+                }
+            }
+            continue;
+        }
+
+        // 腰部控制 - Result callback
+        if waist_result_regex.is_match(&line.line) {
+            if let Some(ref mut flow) = current_flow {
+                for op in flow.operations.iter_mut().rev() {
+                    if op.action_type == "waist" && op.end_ts.is_none() {
+                        op.sub_steps.push(SubStep {
+                            name: "动作完成".to_string(),
+                            timestamp: line.timestamp,
+                        });
+                        break;
+                    }
+                }
+            } else if let Some(flow) = flows.last_mut() {
+                for op in flow.operations.iter_mut().rev() {
+                    if op.action_type == "waist" && op.end_ts.is_none() {
+                        op.sub_steps.push(SubStep {
+                            name: "动作完成".to_string(),
+                            timestamp: line.timestamp,
+                        });
+                        break;
+                    }
+                }
+            }
+            continue;
+        }
 
         // 头部控制完成 - 找到对应的pending头部动作并更新
         if head_end_regex.is_match(&line.line) {
@@ -458,6 +780,10 @@ fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<NavigationFlo
             if let Some(ref mut flow) = current_flow {
                 for op in flow.operations.iter_mut().rev() {
                     if op.action_type == "head" && op.end_ts.is_none() {
+                        op.sub_steps.push(SubStep {
+                            name: "执行完成".to_string(),
+                            timestamp: line.timestamp,
+                        });
                         op.end_ts = Some(line.timestamp);
                         op.status = "ok".to_string();
                         break;
@@ -466,6 +792,10 @@ fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<NavigationFlo
             } else if let Some(flow) = flows.last_mut() {
                 for op in flow.operations.iter_mut().rev() {
                     if op.action_type == "head" && op.end_ts.is_none() {
+                        op.sub_steps.push(SubStep {
+                            name: "执行完成".to_string(),
+                            timestamp: line.timestamp,
+                        });
                         op.end_ts = Some(line.timestamp);
                         op.status = "ok".to_string();
                         break;
@@ -481,6 +811,10 @@ fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<NavigationFlo
             if let Some(ref mut flow) = current_flow {
                 for op in flow.operations.iter_mut().rev() {
                     if op.action_type == "waist" && op.end_ts.is_none() {
+                        op.sub_steps.push(SubStep {
+                            name: "执行完成".to_string(),
+                            timestamp: line.timestamp,
+                        });
                         op.end_ts = Some(line.timestamp);
                         op.status = "ok".to_string();
                         break;
@@ -489,6 +823,10 @@ fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<NavigationFlo
             } else if let Some(flow) = flows.last_mut() {
                 for op in flow.operations.iter_mut().rev() {
                     if op.action_type == "waist" && op.end_ts.is_none() {
+                        op.sub_steps.push(SubStep {
+                            name: "执行完成".to_string(),
+                            timestamp: line.timestamp,
+                        });
                         op.end_ts = Some(line.timestamp);
                         op.status = "ok".to_string();
                         break;
@@ -604,23 +942,23 @@ fn export_csv(records: &[CsvRecord], outdir: &str) -> Result<()> {
 }
 
 fn generate_gantt_charts(
-    records: &[CsvRecord],
+    flows: &[NavigationFlow],
     rounds: &[Round],
     outdir: &str,
     t0: f64,
 ) -> Result<()> {
-    // Group records by round
-    let mut round_records: HashMap<usize, Vec<&CsvRecord>> = HashMap::new();
-    for record in records {
-        round_records
-            .entry(record.round_id)
+    // Group flows by round
+    let mut round_flows: HashMap<usize, Vec<&NavigationFlow>> = HashMap::new();
+    for flow in flows {
+        round_flows
+            .entry(flow.round_id)
             .or_default()
-            .push(record);
+            .push(flow);
     }
 
     for round in rounds {
-        if let Some(round_data) = round_records.get(&round.id) {
-            generate_round_gantt(round, round_data, outdir, t0)?;
+        if let Some(round_flows_data) = round_flows.get(&round.id) {
+            generate_round_gantt(round, round_flows_data, outdir, t0)?;
         }
     }
 
@@ -629,11 +967,11 @@ fn generate_gantt_charts(
 
 fn generate_round_gantt(
     round: &Round,
-    records: &[&CsvRecord],
+    flows: &[&NavigationFlow],
     outdir: &str,
     t0: f64,
 ) -> Result<()> {
-    let round_start = round.start_ts - t0;
+    let _round_start = round.start_ts - t0;
     let round_duration = round.end_ts.map(|end| end - round.start_ts).unwrap_or(0.0);
 
     // Calculate Beijing time for round start and end
@@ -643,45 +981,66 @@ fn generate_round_gantt(
         .map(|end| timestamp_to_beijing_time(end))
         .unwrap_or_else(|| "未结束".to_string());
 
-    // Filter and prepare data
+    // Prepare chart data: (label, detail_info, start, duration, type, sub_steps)
     let mut chart_data = Vec::new();
-    for record in records {
-        if let (Some(start), Some(duration)) = (record.start_rel_s, record.duration_s) {
-            let relative_start = start - round_start;
-            let (label, detail_info) = match record.step_type.as_str() {
-                "nav" | "navigation" => {
-                    let target_pos = record.nav_target_pos.as_deref().unwrap_or("unknown");
-                    (
-                        format!("F{}-nav", record.flow_id),
-                        format!("导航→{}", target_pos),
-                    )
-                }
-                "arm" => {
-                    let action_label = record.action_label.as_deref().unwrap_or("unknown");
-                    let action_code = record.action_code.unwrap_or(0);
-                    (
-                        format!("F{}-arm-{}", record.flow_id, action_code),
-                        format!("机械臂:{}({})", action_label, action_code),
-                    )
-                }
-                "head" => (format!("F{}-head", record.flow_id), "头部控制".to_string()),
-                "waist" => (format!("F{}-waist", record.flow_id), "腰部控制".to_string()),
-                _ => {
-                    let action_label = record.action_label.as_deref().unwrap_or("unknown");
-                    (
-                        format!("F{}-{}", record.flow_id, record.step_type),
-                        action_label.to_string(),
-                    )
-                }
-            };
+
+    for (flow_idx, flow) in flows.iter().enumerate() {
+        let flow_id = flow_idx + 1;
+
+        // 添加导航动作
+        if let Some(nav_start_ts) = flow.nav_start_ts {
+            let nav_start = nav_start_ts - round.start_ts;
+            let nav_duration = flow.nav_end_ts
+                .map(|end| end - nav_start_ts)
+                .unwrap_or(0.0);
+
+            let target_pos = flow.nav_target_pos.as_deref().unwrap_or("unknown");
+            let label = format!("F{}-nav", flow_id);
+            let detail_info = format!("导航→{}", target_pos);
 
             chart_data.push((
                 label,
                 detail_info,
-                relative_start.max(0.0),
-                duration.max(0.0),
-                record.step_type.clone(),
+                nav_start.max(0.0),
+                nav_duration.max(0.0),
+                "navigation".to_string(),
+                flow.nav_sub_steps.clone(),
             ));
+        }
+
+        // 添加其他动作
+        for operation in &flow.operations {
+            if let Some(op_start_ts) = operation.start_ts {
+                let op_start = op_start_ts - round.start_ts;
+                let op_duration = operation.end_ts
+                    .map(|end| end - op_start_ts)
+                    .unwrap_or(0.0);
+
+                let (label, detail_info) = match operation.action_type.as_str() {
+                    "arm" => {
+                        let action_code = operation.action_code.unwrap_or(0);
+                        (
+                            format!("F{}-arm-{}", flow_id, action_code),
+                            format!("机械臂:{}({})", operation.label, action_code),
+                        )
+                    }
+                    "head" => (format!("F{}-head", flow_id), "头部控制".to_string()),
+                    "waist" => (format!("F{}-waist", flow_id), "腰部控制".to_string()),
+                    _ => (
+                        format!("F{}-{}", flow_id, operation.action_type),
+                        operation.label.clone(),
+                    ),
+                };
+
+                chart_data.push((
+                    label,
+                    detail_info,
+                    op_start.max(0.0),
+                    op_duration.max(0.0),
+                    operation.action_type.clone(),
+                    operation.sub_steps.clone(),
+                ));
+            }
         }
     }
 
@@ -691,9 +1050,9 @@ fn generate_round_gantt(
 
     let filename = format!("{}/round_{}_gantt.png", outdir, round.id);
     // 增加分辨率，使用更大的画布和更清晰的渲染
-    let canvas_width = 2800; // 双倍宽度
-    let bar_height = 80; // 增加条形高度
-    let canvas_height = (chart_data.len() * bar_height + 250) as u32; // 增加高度以容纳时间信息
+    let canvas_width = 3600; // 更高分辨率
+    let bar_height = 100; // 增加条形高度
+    let canvas_height = (chart_data.len() * bar_height + 300) as u32; // 增加高度以容纳时间信息
 
     let root = BitMapBackend::new(&filename, (canvas_width, canvas_height)).into_drawing_area();
     root.fill(&WHITE)?;
@@ -701,76 +1060,144 @@ fn generate_round_gantt(
     let max_time = round_duration.max(
         chart_data
             .iter()
-            .map(|(_, _, start, dur, _)| start + dur)
+            .map(|(_, _, start, dur, _, _)| start + dur)
             .fold(0.0, f64::max),
     );
 
+    // 构建标题，包含循环编号
+    let title = if let Some(loop_num) = round.loop_number {
+        format!(
+            "循环{} (Round {}) Timeline (Total: {:.3}s)\n北京时间: {} - {}",
+            loop_num, round.id, round_duration, round_start_beijing, round_end_beijing
+        )
+    } else {
+        format!(
+            "Round {} Timeline (Total: {:.3}s)\n北京时间: {} - {}",
+            round.id, round_duration, round_start_beijing, round_end_beijing
+        )
+    };
+
     let mut chart = ChartBuilder::on(&root)
-        .caption(
-            &format!(
-                "Round {} Timeline (Total: {:.3}s)\n北京时间: {} - {}",
-                round.id, round_duration, round_start_beijing, round_end_beijing
-            ),
-            ("sans-serif", 42),
-        ) // 保持字体大小，增加时间信息
-        .margin(40) // 增加边距
-        .x_label_area_size(80) // 增加标签区域
-        .y_label_area_size(120)
+        .caption(&title, ("sans-serif", 48)) // 增大标题字体
+        .margin(50) // 增加边距
+        .x_label_area_size(100) // 增加标签区域
+        .y_label_area_size(150)
         .build_cartesian_2d(0.0..max_time * 1.1, 0.0..(chart_data.len() as f64))?;
 
     chart
         .configure_mesh()
         .y_desc("Operations")
         .x_desc("Time (seconds relative to round start)")
-        .axis_desc_style(("sans-serif", 20)) // 增大轴标签字体
-        .label_style(("sans-serif", 16)) // 增大刻度标签字体
+        .axis_desc_style(("sans-serif", 24)) // 增大轴标签字体
+        .label_style(("sans-serif", 18)) // 增大刻度标签字体
         .draw()?;
 
-    for (idx, (_label, detail_info, start, duration, step_type)) in chart_data.iter().enumerate() {
-        let color = match step_type.as_str() {
-            "nav" | "navigation" => RGBColor(173, 216, 230).filled(), // 浅蓝色 - 导航
-            "arm" => RGBColor(144, 238, 144).filled(),                // 浅绿色 - 机械臂
-            "head" => RGBColor(255, 218, 185).filled(),               // 浅橙色 - 头部控制
-            "waist" => RGBColor(221, 160, 221).filled(),              // 浅紫色 - 腰部控制
-            _ => RGBColor(192, 192, 192).filled(),                    // 灰色 - 其他
+    for (idx, (_label, detail_info, start, duration, step_type, sub_steps)) in chart_data.iter().enumerate() {
+        let base_color = match step_type.as_str() {
+            "nav" | "navigation" => RGBColor(173, 216, 230), // 浅蓝色 - 导航
+            "arm" => RGBColor(144, 238, 144),                // 浅绿色 - 机械臂
+            "head" => RGBColor(255, 218, 185),               // 浅橙色 - 头部控制
+            "waist" => RGBColor(221, 160, 221),              // 浅紫色 - 腰部控制
+            _ => RGBColor(192, 192, 192),                    // 灰色 - 其他
         };
 
         let y_pos = idx as f64;
-        let y_height = 0.7; // 调整条形高度比例
+        let y_height = 0.7; // 条形高度
 
-        // Draw the rectangle with better spacing
+        // 绘制主方块 - 半透明填充
         chart.draw_series(std::iter::once(Rectangle::new(
             [
                 (*start, y_pos + 0.15),
                 (*start + *duration, y_pos + y_height + 0.15),
             ],
-            color,
+            base_color.mix(0.3).filled(), // 浅色填充
         )))?;
 
-        // Add text label in the middle of the rectangle
-        let text_x = *start + *duration / 2.0;
-        let text_y = y_pos + y_height / 2.0 + 0.15;
+        // 绘制边框
+        chart.draw_series(std::iter::once(Rectangle::new(
+            [
+                (*start, y_pos + 0.15),
+                (*start + *duration, y_pos + y_height + 0.15),
+            ],
+            base_color,
+        )))?;
 
-        // Create label text with duration - always show duration with >time< format
+        // 绘制子步骤
+        if !sub_steps.is_empty() && *duration > 0.0 {
+            let sub_y_start = y_pos + 0.15;  // 子步骤从主方块顶部开始
+            let sub_y_height = y_height; // 子步骤填满整个主方块高度
+
+            // 为不同类型的子步骤定义颜色
+            let get_sub_step_color = |name: &str| -> RGBColor {
+                if name == "开始执行" || name.starts_with("开始执行") {
+                    RGBColor(100, 149, 237) // 矢车菊蓝
+                } else if name == "设置导航目标" {
+                    RGBColor(70, 130, 180) // 钢蓝
+                } else if name == "发送目标" || name == "发送导航目标" || name == "发送头部控制目标" || name == "发送腰部控制目标" {
+                    RGBColor(255, 165, 0) // 橙色
+                } else if name == "服务端接受" {
+                    RGBColor(60, 179, 113) // 中海绿
+                } else if name == "结果回调" {
+                    RGBColor(147, 112, 219) // 中紫色
+                } else if name == "动作完成" || name.starts_with("动作完成") {
+                    RGBColor(255, 69, 0) // 红橙色
+                } else if name == "执行完成" {
+                    RGBColor(34, 139, 34) // 森林绿
+                } else {
+                    RGBColor(128, 128, 128) // 灰色
+                }
+            };
+
+            // 绘制每个子步骤之间的时间段
+            for i in 0..sub_steps.len() {
+                let sub_start_ts = sub_steps[i].timestamp;
+                let sub_start = (sub_start_ts - round.start_ts).max(0.0);
+
+                // 确定子步骤的结束时间
+                let sub_end = if i + 1 < sub_steps.len() {
+                    (sub_steps[i + 1].timestamp - round.start_ts).max(0.0)
+                } else {
+                    *start + *duration // 最后一个子步骤延伸到主动作结束
+                };
+
+                let sub_duration = sub_end - sub_start;
+
+                if sub_duration > 0.0 {
+                    // 根据子步骤名称获取颜色
+                    let sub_color = get_sub_step_color(&sub_steps[i].name);
+
+                    // 绘制子步骤方块 - 使用不同颜色
+                    chart.draw_series(std::iter::once(Rectangle::new(
+                        [
+                            (sub_start, sub_y_start),
+                            (sub_end, sub_y_start + sub_y_height),
+                        ],
+                        sub_color.filled(),
+                    )))?;
+                }
+            }
+        }
+
+        // 在主方块顶部添加主标签
+        let text_x = *start + *duration / 2.0;
+        let text_y = y_pos + 0.08; // 放在方块顶部
+
+        // 创建主标签文本
         let label_text = if *duration > 20.0 {
-            // For very long operations, show detail and duration on separate lines
-            format!("{}\n>{:.1}s<", detail_info, duration)
+            format!("{}\n总计:{:.1}s", detail_info, duration)
         } else if *duration > 10.0 {
-            // For long operations, show detail and duration
-            format!("{} >{:.1}s<", detail_info, duration)
+            format!("{} ({:.1}s)", detail_info, duration)
         } else if *duration > 5.0 {
-            // For medium operations, show abbreviated detail and duration
             let short_detail = if detail_info.chars().count() > 10 {
                 let truncated: String = detail_info.chars().take(7).collect();
                 format!("{}...", truncated)
             } else {
                 detail_info.clone()
             };
-            format!("{} >{:.1}s<", short_detail, duration)
+            format!("{} ({:.1}s)", short_detail, duration)
         } else if *duration > 2.0 {
-            // For short operations, show type and duration
             format!(
-                "{} >{:.1}s<",
+                "{} ({:.1}s)",
                 match step_type.as_str() {
                     "nav" | "navigation" => "导航",
                     "arm" => "机械臂",
@@ -781,29 +1208,29 @@ fn generate_round_gantt(
                 duration
             )
         } else {
-            // For very short operations, just show duration
-            format!(">{:.1}s<", duration)
+            format!("{:.1}s", duration)
         };
 
-        // Choose font size based on rectangle width and height - 增大字体以适应高分辨率
+        // 选择字体大小（适应更高分辨率）
         let font_size = if *duration > 15.0 {
-            24
+            22
         } else if *duration > 8.0 {
             20
         } else if *duration > 2.0 {
-            16
+            18
         } else {
-            14
+            16
         };
 
-        // Only draw text if there's enough space (minimum 1 second width)
-        if *duration > 1.0 {
+        // 绘制主标签
+        if *duration > 0.5 {
             chart.draw_series(std::iter::once(Text::new(
                 label_text,
                 (text_x, text_y),
                 ("sans-serif", font_size)
                     .into_font()
                     .color(&BLACK)
+                    .pos(Pos::new(HPos::Center, VPos::Top))
                     .transform(FontTransform::None),
             )))?;
         }
