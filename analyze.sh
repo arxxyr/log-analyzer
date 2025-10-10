@@ -76,19 +76,22 @@ get_latest_remote_log() {
 download_log() {
     local log_file=$1
     local remote_path="$REMOTE_LOG_DIR/$log_file"
-    
+
     print_info "下载日志: $log_file"
-    
+
+    # 确保 logs 目录存在
+    mkdir -p ./logs
+
     # 检查本地是否已存在
-    if [ -f "$log_file" ]; then
-        print_warning "本地已存在文件 $log_file，将覆盖"
+    if [ -f "./logs/$log_file" ]; then
+        print_warning "本地已存在文件 ./logs/$log_file，将覆盖"
     fi
-    
+
     # 下载
-    scp -P $REMOTE_PORT $REMOTE_USER@$REMOTE_HOST:$remote_path ./
-    
+    scp -P $REMOTE_PORT $REMOTE_USER@$REMOTE_HOST:$remote_path ./logs/$log_file
+
     if [ $? -eq 0 ]; then
-        print_success "下载完成 ($(ls -lh $log_file | awk '{print $5}'))"
+        print_success "下载完成 ($(ls -lh ./logs/$log_file | awk '{print $5}'))"
         return 0
     else
         return 1
@@ -160,34 +163,40 @@ main() {
         # 自动模式：获取最新日志
         print_info "自动模式：获取最新日志"
         LOG_FILE=$(get_latest_remote_log)
-        
+
         # 清理LOG_FILE中可能的颜色代码
         LOG_FILE=$(echo "$LOG_FILE" | sed 's/\x1B\[[0-9;]*m//g')
-        
+
         print_success "找到最新日志: $LOG_FILE"
-        
+
         if download_log "$LOG_FILE"; then
-            analyze_log "$LOG_FILE"
+            analyze_log "./logs/$LOG_FILE"
         else
             print_error "下载失败"
             exit 1
         fi
-        
+
     else
         # 指定文件模式
         LOG_FILE=$1
-        
-        if [ -f "$LOG_FILE" ]; then
-            # 本地文件存在，直接分析
+
+        # 先检查 logs 目录下是否存在
+        if [ -f "./logs/$LOG_FILE" ]; then
+            # logs 目录下的文件存在，直接分析
+            print_info "分析 logs 目录下的文件: $LOG_FILE"
+            analyze_log "./logs/$LOG_FILE"
+
+        elif [ -f "$LOG_FILE" ]; then
+            # 当前目录下文件存在，直接分析
             print_info "分析本地文件: $LOG_FILE"
             analyze_log "$LOG_FILE"
-            
+
         else
             # 尝试从远程下载
             print_info "本地未找到文件，尝试从远程下载: $LOG_FILE"
-            
+
             if download_log "$LOG_FILE"; then
-                analyze_log "$LOG_FILE"
+                analyze_log "./logs/$LOG_FILE"
             else
                 print_error "文件 $LOG_FILE 不存在（本地和远程都未找到）"
                 echo ""
