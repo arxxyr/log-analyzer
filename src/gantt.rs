@@ -30,9 +30,19 @@ pub fn generate_gantt_charts(
         round_flows.entry(flow.round_id).or_default().push(flow);
     }
 
+    // 计算需要的数字位数（根据轮次总数）
+    let total_rounds = rounds.len();
+    let width = if total_rounds >= 100 {
+        3
+    } else if total_rounds >= 10 {
+        2
+    } else {
+        1
+    };
+
     for round in rounds {
         if let Some(round_flows_data) = round_flows.get(&round.id) {
-            generate_round_gantt(round, round_flows_data, outdir, t0)?;
+            generate_round_gantt(round, round_flows_data, outdir, t0, width)?;
         }
     }
 
@@ -46,11 +56,13 @@ pub fn generate_gantt_charts(
 /// * `flows` - 属于该轮次的导航流程列表
 /// * `outdir` - 输出目录
 /// * `t0` - 起始时间戳
+/// * `width` - 编号宽度（用于前导零）
 fn generate_round_gantt(
     round: &Round,
     flows: &[&NavigationFlow],
     outdir: &str,
     t0: f64,
+    width: usize,
 ) -> Result<()> {
     let _round_start = round.start_ts - t0;
     let round_duration = round.end_ts.map(|end| end - round.start_ts).unwrap_or(0.0);
@@ -185,7 +197,7 @@ fn generate_round_gantt(
         }
     }
 
-    let filename = format!("{}/round_{}_gantt.png", outdir, round.id);
+    let filename = format!("{}/round_{:0width$}_gantt.png", outdir, round.id, width = width);
     let canvas_width = 3600; // 更高分辨率
     let bar_height = 180; // 增加条形高度
     let canvas_height = (action_types.len() * bar_height + 400) as u32;
