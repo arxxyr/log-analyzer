@@ -53,6 +53,10 @@
 //! }
 //! ```
 
+// 允许 abi_stable 宏生成的代码风格
+#![allow(non_camel_case_types)]  // abi_stable 宏生成的类型使用 snake_case 后缀
+#![allow(non_local_definitions)]  // abi_stable 宏在常量内生成 impl 块
+
 use abi_stable::{
     declare_root_module_statics,
     package_version_strings,

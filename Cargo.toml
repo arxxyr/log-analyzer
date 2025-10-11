@@ -4,6 +4,7 @@ members = [
     "crates/analyzer-core",
     "crates/analyzer-cli",
     "plugins/master-control-analyzer",
+    "plugins/cpp-demo-analyzer",
 ]
 
 [workspace.package]

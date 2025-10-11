@@ -29,7 +29,3 @@ clap = { workspace = true }
 # 序列化
 serde = { workspace = true }
 serde_json = { workspace = true }
-
-[profile.release]
-opt-level = 3
-strip = true

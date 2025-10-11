@@ -29,7 +29,3 @@ regex = { workspace = true }
 csv = { workspace = true }
 chrono = { workspace = true }
 plotters = { workspace = true }
-
-[profile.release]
-opt-level = 3
-strip = true
