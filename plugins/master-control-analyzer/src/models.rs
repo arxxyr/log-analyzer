@@ -2,21 +2,7 @@
 //!
 //! 本模块包含日志分析工具中使用的所有核心数据结构
 
-use clap::Parser;
 use serde::Serialize;
-
-/// 命令行参数
-#[derive(Parser, Debug)]
-#[command(author, version, about, long_about = None)]
-pub struct Args {
-    /// 输入日志文件路径
-    #[arg(short, long)]
-    pub log: String,
-
-    /// 输出目录
-    #[arg(short, long, default_value = "output")]
-    pub outdir: String,
-}
 
 /// 日志行结构，包含时间戳和原始日志内容
 #[derive(Debug, Clone)]

@@ -4,29 +4,90 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 项目概述
 
-这是一个 **Rust 日志分析工具**，专门用于解析和分析机器人控制系统（master_control）的日志文件。该工具能够：
+这是一个基于**插件架构**的 **Rust 日志分析框架**。
+
+### v0.2.0 架构变更（2025-10-11）
+
+项目已从单体应用重构为插件化架构：
+
+- 🔌 **插件系统** - 使用 `abi_stable` 实现 ABI 稳定的插件架构
+- 📦 **Workspace 结构** - 分为核心库、CLI 和插件三层
+- 🔄 **动态加载** - 支持运行时加载分析器插件
+- 🛡️ **类型安全** - 保留 Rust 的类型安全和性能优势
+
+### 核心功能
+
 - 从日志中提取导航和机械臂操作的时序信息
 - 检测并分析多轮任务执行情况
 - 生成 CSV 报告和甘特图可视化
+- **支持扩展** - 可轻松添加新的日志分析器
+
+## 项目结构（Workspace）
+
+```
+analyzer/
+├── Cargo.toml                    # Workspace 配置
+├── crates/
+│   ├── analyzer-core/            # 核心接口库（定义插件 API）
+│   │   ├── Cargo.toml
+│   │   └── src/lib.rs
+│   └── analyzer-cli/             # CLI 主程序（插件加载器）
+│       ├── Cargo.toml
+│       └── src/main.rs
+├── plugins/
+│   └── master-control-analyzer/  # 机器人控制系统日志分析器
+│       ├── Cargo.toml            # crate-type = ["cdylib", "rlib"]
+│       └── src/
+│           ├── lib.rs            # 插件实现
+│           ├── models.rs
+│           ├── parser.rs
+│           ├── round_detector.rs
+│           ├── flow_detector.rs
+│           ├── csv_exporter.rs
+│           └── gantt.rs
+└── docs/
+    └── PLUGIN_ARCHITECTURE.md    # 插件开发文档
+```
 
 ## 常用命令
 
 ### 构建
-```bash
-# Debug 模式
-cargo build
 
-# Release 模式（推荐用于分析大型日志）
+```bash
+# 构建所有组件（workspace）
 cargo build --release
+
+# 单独构建核心库
+cargo build --package analyzer-core --release
+
+# 单独构建 CLI
+cargo build --package analyzer-cli --release
+
+# 单独构建插件
+cargo build --package master-control-analyzer --release
 ```
 
-### 运行
-```bash
-# 基本用法
-cargo run --release -- --log <日志文件路径> --outdir <输出目录>
+### 运行（新的 CLI 方式）
 
-# 示例
-cargo run --release -- --log master_control_3943506_1756803704695.log --outdir output
+```bash
+# 列出所有可用插件
+./target/release/analyzer --list
+
+# 分析日志文件（自动选择插件）
+./target/release/analyzer -i logs/your.log -o output
+
+# 指定插件
+./target/release/analyzer -i logs/your.log -o output --plugin master-control-analyzer
+
+# 指定插件目录
+./target/release/analyzer -i logs/your.log -o output --plugin-dir /path/to/plugins
+```
+
+### 兼容旧命令（直接使用插件）
+
+```bash
+# 仍然可以直接使用插件（作为库）
+cargo run --release --package master-control-analyzer --example direct_use
 ```
 
 ### 测试
@@ -88,14 +149,15 @@ cargo clippy -- -W clippy::all
    - `generate_gantt_charts()`: 为每个轮次生成甘特图
    - 辅助函数：`draw_sub_steps`, `draw_time_label`, `draw_main_label`
 
-8. **lib.rs** - 库入口
+8. **lib.rs** - 插件入口
+   - 实现 `AnalyzerPlugin` trait
+   - 导出插件模块（`#[export_root_module]`）
+   - 提供工厂函数（`create_plugin`）
    - 模块声明与公共 API 导出
-   - 提供统一的库接口
 
-9. **main.rs** - 程序入口（115 行）
-   - 参数解析
-   - 调用各模块功能
-   - 输出分析结果
+9. **main.rs** - （已弃用，保留用于独立测试）
+   - 旧版单体应用入口
+   - 现在请使用 `analyzer-cli` 主程序
 
 ### 核心数据流
 1. **日志解析** (`parser::load_log_lines`): 读取日志文件，提取带时间戳的行
@@ -160,7 +222,35 @@ cargo clippy -- -W clippy::all
 
 ## 开发指南
 
-### 添加新的动作类型
+### 开发新插件
+
+详细的插件开发文档见 [docs/PLUGIN_ARCHITECTURE.md](docs/PLUGIN_ARCHITECTURE.md)。
+
+快速步骤：
+
+1. **创建插件项目**
+   ```bash
+   cd plugins
+   cargo new --lib my-analyzer
+   ```
+
+2. **配置 Cargo.toml**
+   ```toml
+   [lib]
+   crate-type = ["cdylib", "rlib"]
+
+   [dependencies]
+   analyzer-core = { path = "../../crates/analyzer-core" }
+   abi_stable = "0.11"
+   ```
+
+3. **实现 AnalyzerPlugin trait**
+4. **导出插件模块**（使用 `#[export_root_module]`）
+5. **编译并复制到 plugins 目录**
+
+### 修改现有插件（master-control-analyzer）
+
+#### 添加新的动作类型
 
 若需支持新的动作类型（如 `gripper`、`vision` 等）：
 
@@ -170,23 +260,24 @@ cargo clippy -- -W clippy::all
 4. 在 `gantt.rs` 的颜色映射中添加新颜色
 5. 更新 CLAUDE.md 的"支持的动作类型"部分
 
-### 添加新的输出格式
+#### 添加新的输出格式
 
 若需导出其他格式（如 JSON、Excel）：
 
-1. 在 `csv_exporter.rs` 中添加新的导出函数
+1. 在插件的 `csv_exporter.rs` 中添加新的导出函数
 2. 或创建新模块（如 `json_exporter.rs`）
-3. 在 `lib.rs` 中声明模块
-4. 在 `main.rs` 中调用导出函数
+3. 在插件的 `lib.rs` 中声明模块
+4. 在 `run_analysis_internal()` 函数中调用导出函数
 
-### 修改日志解析规则
+#### 修改日志解析规则
 
 若日志格式发生变化：
 
-1. 更新 `parser.rs` 中的时间戳正则表达式
-2. 更新 `round_detector.rs` 中的循环标记匹配
-3. 更新 `flow_detector.rs` 中的动作日志模式
-4. 运行测试确保向后兼容性
+1. 更新插件的 `parser.rs` 中的时间戳正则表达式
+2. 更新插件的 `round_detector.rs` 中的循环标记匹配
+3. 更新插件的 `flow_detector.rs` 中的动作日志模式
+4. 重新编译插件：`cargo build --package master-control-analyzer --release`
+5. 运行测试确保向后兼容性
 
 ### 代码风格
 
@@ -207,5 +298,35 @@ cargo clippy -- -W clippy::all
    - CSV 中的时间为相对于日志开始的秒数
 3. **轮次检测**: 基于循环标记（`loop: 开始循环` 和 `loop: 结束当前循环`）自动检测任务轮次
 4. **性能**: 对于大型日志文件（>100MB），建议使用 release 模式构建
-5. **依赖版本**: 使用 Rust edition 2024，主要依赖包括 plotters（图表）、csv（数据导出）、regex（模式匹配）
+5. **依赖版本**: 使用 Rust edition 2024，主要依赖：
+   - `abi_stable = "0.11"` - ABI 稳定性（核心依赖）
+   - `plotters` - 图表生成
+   - `csv` - 数据导出
+   - `regex` - 模式匹配
 6. **模块化设计**: 各模块职责清晰，修改时尽量保持单一职责原则（SRP），避免跨模块耦合
+7. **插件开发**:
+   - 所有插件必须实现 `AnalyzerPlugin` trait
+   - 使用 ABI 稳定的类型（`RString`, `RVec`, `RResult` 等）
+   - 正确导出根模块（`#[export_root_module]`）
+   - 编译为动态库（`crate-type = ["cdylib", "rlib"]`）
+
+## 版本变更
+
+### v0.2.0 重大变更
+
+1. **架构重构** - 从单体应用改为插件架构
+2. **CLI 变化** - 新的命令行接口（`analyzer` 而非直接运行插件）
+3. **构建方式** - 使用 workspace 管理多个包
+4. **插件系统** - 支持动态加载多个分析器
+
+### 向后兼容性
+
+- 插件内部的分析逻辑保持不变
+- CSV 和甘特图输出格式兼容
+- 可通过 `cargo run --package master-control-analyzer` 独立运行插件（测试用）
+
+## 参考文档
+
+- [插件架构文档](docs/PLUGIN_ARCHITECTURE.md) - 详细的插件开发指南
+- [README.md](README.md) - 用户使用文档
+- [SOP.md](SOP.md) - 操作流程文档

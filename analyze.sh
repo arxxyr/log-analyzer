@@ -9,7 +9,7 @@ REMOTE_PORT="23"
 REMOTE_USER="firefly"
 REMOTE_LOG_DIR="/home/firefly/.ros/log"
 LOCAL_OUTPUT_DIR="output"
-ANALYZER_BIN="./master_control_analyzer"  # 编译好的二进制文件
+ANALYZER_BIN="./analyzer"  # 新的插件化分析器
 
 # 颜色定义
 RED='\033[0;31m'
@@ -30,29 +30,51 @@ show_help() {
     echo "  $0                    # 自动获取并分析最新日志"
     echo "  $0 <log_file>        # 分析指定的日志文件（本地或远程）"
     echo "  $0 -h                # 显示此帮助信息"
+    echo "  $0 --list            # 列出所有可用的分析器插件"
     echo ""
     echo "示例:"
     echo "  $0                                          # 自动模式"
     echo "  $0 master_control_3463_1755747167392.log   # 指定文件"
+    echo "  $0 --list                                   # 列出插件"
     echo ""
     echo "配置:"
     echo "  远程主机: $REMOTE_USER@$REMOTE_HOST:$REMOTE_PORT"
     echo "  日志路径: $REMOTE_LOG_DIR"
     echo "  输出目录: $LOCAL_OUTPUT_DIR"
+    echo "  分析器:   $ANALYZER_BIN (插件化架构)"
+    echo ""
+    echo "注意:"
+    echo "  本脚本使用插件化的分析器架构 (v0.2.0+)"
+    echo "  插件会自动根据文件扩展名选择合适的分析器"
 }
 
 # 检查分析程序
 check_analyzer() {
     if [ ! -f "$ANALYZER_BIN" ]; then
         print_error "分析程序未找到: $ANALYZER_BIN"
-        print_info "请确保已将编译好的二进制文件放置在当前目录"
         exit 1
     fi
-    
+
     # 添加执行权限
     if [ ! -x "$ANALYZER_BIN" ]; then
         print_warning "添加执行权限..."
         chmod +x "$ANALYZER_BIN"
+    fi
+
+    # 检查插件目录
+    local plugin_dir="./plugins"
+    if [ ! -d "$plugin_dir" ]; then
+        print_warning "插件目录未找到: $plugin_dir"
+        print_info "正在创建插件目录..."
+        mkdir -p "$plugin_dir"
+    fi
+
+    # 检查 master-control-analyzer 插件
+    local plugin_file="$plugin_dir/libmaster_control_analyzer.so"
+    if [ ! -f "$plugin_file" ]; then
+        print_warning "master-control-analyzer 插件未找到"
+        print_error "无法找到插件文件，请确保已构建插件"
+        exit 1
     fi
 }
 
@@ -101,17 +123,17 @@ download_log() {
 # 分析日志
 analyze_log() {
     local log_file=$1
-    
+
     print_info "开始分析: $log_file"
-    
+
     # 创建输出目录
     mkdir -p $LOCAL_OUTPUT_DIR
-    
+
     # 清理旧的输出
     rm -f $LOCAL_OUTPUT_DIR/*.png $LOCAL_OUTPUT_DIR/*.csv 2>/dev/null
-    
-    # 运行分析
-    $ANALYZER_BIN --log $log_file --outdir $LOCAL_OUTPUT_DIR
+
+    # 运行分析（使用新的命令行参数格式）
+    $ANALYZER_BIN -i "$log_file" -o "$LOCAL_OUTPUT_DIR"
     
     if [ $? -eq 0 ]; then
         print_success "分析完成"
@@ -156,6 +178,13 @@ main() {
     # 处理参数
     if [ "$1" == "-h" ] || [ "$1" == "--help" ]; then
         show_help
+        exit 0
+    fi
+
+    if [ "$1" == "--list" ]; then
+        print_info "列出所有可用的分析器插件:"
+        echo ""
+        $ANALYZER_BIN --list
         exit 0
     fi
     
