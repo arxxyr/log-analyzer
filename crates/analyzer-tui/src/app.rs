@@ -2,7 +2,7 @@
 
 use crate::{
     events::{Event, EventHandler},
-    state::AppState,
+    state::{AppState, FocusArea},
     ui,
 };
 use anyhow::Result;
@@ -60,41 +60,81 @@ impl App {
 
     /// 处理事件
     fn handle_event(&mut self, event: Event) -> AppResult<()> {
-        // 分离借用：先获取事件，再处理
+        // 根据当前焦点区域处理事件
+        let focus = self.state.focus();
+
         match event {
             Event::Quit => {
                 self.quit();
             }
-            Event::Key(key) => match key.code {
-                KeyCode::Char('q') | KeyCode::Esc => {
-                    self.quit();
+            Event::Key(key) => {
+                // 全局快捷键
+                match key.code {
+                    KeyCode::Char('q') | KeyCode::Esc => {
+                        self.quit();
+                        return Ok(());
+                    }
+                    KeyCode::Tab => {
+                        // Tab 切换焦点
+                        self.state.toggle_focus();
+                        return Ok(());
+                    }
+                    _ => {}
                 }
-                KeyCode::Char('p') | KeyCode::Char(' ') => {
-                    // 暂停/恢复
-                    self.state.toggle_pause();
+
+                // 根据焦点区域处理按键
+                match focus {
+                    FocusArea::Main => {
+                        // 主区域（日志查看）
+                        match key.code {
+                            KeyCode::Char('p') | KeyCode::Char(' ') => {
+                                // 暂停/恢复
+                                self.state.toggle_pause();
+                            }
+                            KeyCode::Up => {
+                                // 向上滚动日志
+                                self.scroll_offset = self.scroll_offset.saturating_sub(1);
+                            }
+                            KeyCode::Down => {
+                                // 向下滚动日志
+                                self.scroll_offset = self.scroll_offset.saturating_add(1);
+                            }
+                            KeyCode::PageUp => {
+                                // 向上翻页
+                                self.scroll_offset = self.scroll_offset.saturating_sub(10);
+                            }
+                            KeyCode::PageDown => {
+                                // 向下翻页
+                                self.scroll_offset = self.scroll_offset.saturating_add(10);
+                            }
+                            KeyCode::Home => {
+                                // 回到顶部
+                                self.scroll_offset = 0;
+                            }
+                            _ => {}
+                        }
+                    }
+                    FocusArea::PluginPanel => {
+                        // 插件面板
+                        match key.code {
+                            KeyCode::Up => {
+                                self.state.select_previous_plugin();
+                            }
+                            KeyCode::Down => {
+                                self.state.select_next_plugin();
+                            }
+                            KeyCode::Char(' ') => {
+                                self.state.toggle_selected_plugin();
+                            }
+                            KeyCode::Enter => {
+                                // 请求重启工作流
+                                self.state.request_restart();
+                            }
+                            _ => {}
+                        }
+                    }
                 }
-                KeyCode::Up => {
-                    // 向上滚动日志
-                    self.scroll_offset = self.scroll_offset.saturating_sub(1);
-                }
-                KeyCode::Down => {
-                    // 向下滚动日志
-                    self.scroll_offset = self.scroll_offset.saturating_add(1);
-                }
-                KeyCode::PageUp => {
-                    // 向上翻页
-                    self.scroll_offset = self.scroll_offset.saturating_sub(10);
-                }
-                KeyCode::PageDown => {
-                    // 向下翻页
-                    self.scroll_offset = self.scroll_offset.saturating_add(10);
-                }
-                KeyCode::Home => {
-                    // 回到顶部
-                    self.scroll_offset = 0;
-                }
-                _ => {}
-            },
+            }
             Event::Tick => {
                 // 定时刷新（UI 会自动重绘）
             }

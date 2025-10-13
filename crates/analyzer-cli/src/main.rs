@@ -351,18 +351,59 @@ impl TransferProgress for TuiProgressCallback {
 
 #[cfg(feature = "tui")]
 fn run_with_tui(config: &AnalyzerConfig) -> Result<()> {
-    use analyzer_tui::state::{LogLevel, WorkflowPhase};
+    use analyzer_tui::state::{LogLevel, PluginDisplayInfo};
 
     info!("启动 TUI 模式");
 
     // 创建 TUI 应用状态
     let app_state = AppState::new();
-    app_state.add_log(LogLevel::Info, "TUI 模式已启动");
-    app_state.add_log(LogLevel::Info, "按 q 或 ESC 退出");
-    app_state.add_log(LogLevel::Info, "按 p 或 空格 暂停/恢复");
 
-    // 初始化工作流阶段
-    app_state.set_phase(WorkflowPhase::Initializing);
+    // 预先加载所有插件信息（但不实际加载）
+    let plugin_dir = &config.local.plugin_dir;
+    let mut potential_plugins = Vec::new();
+
+    if plugin_dir.exists() {
+        for entry in fs::read_dir(plugin_dir)? {
+            let entry = entry?;
+            let path = entry.path();
+
+            if let Some(ext) = path.extension() {
+                #[cfg(target_os = "linux")]
+                let is_lib = ext == "so";
+                #[cfg(target_os = "macos")]
+                let is_lib = ext == "dylib";
+                #[cfg(target_os = "windows")]
+                let is_lib = ext == "dll";
+
+                if is_lib {
+                    // 尝试读取插件元数据
+                    if let Ok(module) = AnalyzerPluginModule_Ref::load_from_file(&path) {
+                        let plugin = module.create_plugin()();
+                        let metadata = plugin.metadata();
+
+                        // 检查配置文件中是否标记为必需或默认启用
+                        let plugin_name = metadata.name.to_string();
+                        let analyzer_config = config.analyzers.iter()
+                            .find(|a| a.plugin == plugin_name);
+
+                        let is_required = analyzer_config.map(|a| a.required).unwrap_or(false);
+                        let is_enabled = analyzer_config.map(|a| a.enabled).unwrap_or(true);
+
+                        potential_plugins.push(PluginDisplayInfo {
+                            name: plugin_name.clone(),
+                            version: metadata.version.to_string(),
+                            description: metadata.description.to_string(),
+                            enabled: is_enabled,
+                            required: is_required,
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    // 设置可用插件列表
+    app_state.set_available_plugins(potential_plugins);
 
     // 创建 TUI 应用
     let mut app = App::new(app_state.clone());
@@ -370,7 +411,7 @@ fn run_with_tui(config: &AnalyzerConfig) -> Result<()> {
     // 使用 tokio 运行时
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(async {
-        // 启动工作流（在后台）
+        // 在后台运行工作流
         let state_clone = app_state.clone();
         let mut config_clone = config.clone();
 
@@ -379,330 +420,23 @@ fn run_with_tui(config: &AnalyzerConfig) -> Result<()> {
         config_clone.workflow.progress.show_progress_bar = false;
 
         tokio::spawn(async move {
-            state_clone.add_log(LogLevel::Info, "初始化工作流...");
-            state_clone.set_phase(WorkflowPhase::Initializing);
+            // 工作流循环：支持重启
+            loop {
+                // 执行一次工作流
+                run_workflow_once(&state_clone, &config_clone).await;
 
-            // 加载插件
-            state_clone.add_log(LogLevel::Info, format!("加载插件目录: {}", config_clone.local.plugin_dir.display()));
-            let mut plugin_manager = PluginManager::new();
-            if let Err(e) = plugin_manager.load_plugins(&config_clone.local.plugin_dir) {
-                state_clone.add_log(LogLevel::Error, format!("加载插件失败: {}", e));
-                state_clone.set_phase(WorkflowPhase::Error);
-                return;
-            }
-            state_clone.add_log(LogLevel::Info, format!("成功加载 {} 个插件", plugin_manager.plugins.len()));
-
-            // 清理旧输出
-            if config_clone.local.cleanup_old_output && config_clone.local.output_dir.exists() {
-                state_clone.add_log(LogLevel::Info, "清理旧输出文件");
-                if let Ok(entries) = fs::read_dir(&config_clone.local.output_dir) {
-                    for entry in entries.flatten() {
-                        let path = entry.path();
-                        if path.is_file() {
-                            let ext = path.extension().and_then(|e| e.to_str());
-                            if matches!(ext, Some("png") | Some("csv")) {
-                                let _ = fs::remove_file(path);
-                            }
-                        }
+                // 等待重启请求
+                loop {
+                    if state_clone.is_restart_requested() {
+                        state_clone.clear_restart_request();
+                        state_clone.add_log(LogLevel::Info, "🔄 重启工作流...");
+                        state_clone.reset_for_restart();
+                        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                        break; // 跳出内循环，重新执行工作流
                     }
+                    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
                 }
             }
-
-            // 执行自动工作流（手动实现，使用自定义进度回调）
-            use analyzer_remote::{FileTransfer, SshConfig, SshConnection};
-            use analyzer_workflow::discoverer::FileDiscoverer;
-            use analyzer_workflow::selector::PluginSelector;
-
-            state_clone.set_phase(WorkflowPhase::Connecting);
-            state_clone.add_log(LogLevel::Info, "连接到远程服务器...");
-
-            // 1. 连接SSH
-            let ssh_config = SshConfig {
-                host: config_clone.remote.host.clone(),
-                port: config_clone.remote.port,
-                user: config_clone.remote.user.clone(),
-                auth: config_clone.remote.auth.to_auth_method(),
-                timeouts: config_clone.remote.timeouts.clone(),
-            };
-
-            let mut connection = match SshConnection::connect(ssh_config) {
-                Ok(conn) => conn,
-                Err(e) => {
-                    state_clone.add_log(LogLevel::Error, format!("SSH连接失败: {}", e));
-                    state_clone.set_phase(WorkflowPhase::Error);
-                    return;
-                }
-            };
-
-            state_clone.set_phase(WorkflowPhase::Discovering);
-            state_clone.add_log(LogLevel::Info, "发现日志文件...");
-
-            // 2. 发现文件
-            let discoverer = FileDiscoverer::new(config_clone.file_discovery.clone());
-            let selector = PluginSelector::new(config_clone.analyzers.clone());
-
-            let pattern = selector
-                .list_enabled()
-                .first()
-                .map(|m| m.pattern.clone())
-                .unwrap_or_else(|| "*.log".to_string());
-
-            let file_info = match discoverer.discover_and_select_remote(
-                &mut connection,
-                config_clone.remote.log_dir.to_str().unwrap(),
-                &pattern,
-            ) {
-                Ok(file) => file,
-                Err(e) => {
-                    state_clone.add_log(LogLevel::Error, format!("文件发现失败: {}", e));
-                    state_clone.set_phase(WorkflowPhase::Error);
-                    return;
-                }
-            };
-
-            state_clone.add_log(LogLevel::Info, format!("找到文件: {}", file_info.name));
-
-            // 3. 使用自定义回调下载文件
-            let local_path = config_clone.local.log_dir.join(&file_info.name);
-
-            // 确保本地目录存在
-            if let Err(e) = fs::create_dir_all(&config_clone.local.log_dir) {
-                state_clone.add_log(LogLevel::Error, format!("创建目录失败: {}", e));
-                state_clone.set_phase(WorkflowPhase::Error);
-                return;
-            }
-
-            let mut transfer = FileTransfer::new(connection);
-            let progress_callback = TuiProgressCallback::new(state_clone.clone(), file_info.name.clone());
-
-            if let Err(e) = transfer.download_with_callback(&file_info.path, &local_path, Some(progress_callback)) {
-                state_clone.add_log(LogLevel::Error, format!("下载失败: {}", e));
-                state_clone.set_phase(WorkflowPhase::Error);
-                return;
-            }
-
-            // 4. 选择插件
-            let plugin_name = match selector.select_plugin(&file_info.name) {
-                Some(mapping) => mapping.plugin.clone(),
-                None => {
-                    state_clone.add_log(LogLevel::Error, "未找到匹配的插件");
-                    state_clone.set_phase(WorkflowPhase::Error);
-                    return;
-                }
-            };
-
-            let file_to_analyze = local_path;
-
-            // 查找插件
-            let plugin = match plugin_manager.find_by_name(&plugin_name) {
-                Some(p) => p,
-                None => {
-                    state_clone.add_log(LogLevel::Error, format!("未找到插件: {}", plugin_name));
-                    state_clone.set_phase(WorkflowPhase::Error);
-                    return;
-                }
-            };
-
-            state_clone.set_phase(WorkflowPhase::Analyzing);
-            state_clone.add_log(
-                LogLevel::Info,
-                format!("开始分析: {}", file_to_analyze.file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("未知文件"))
-            );
-            state_clone.add_log(
-                LogLevel::Info,
-                format!("使用插件: {} v{}", plugin.metadata.name, plugin.metadata.version)
-            );
-
-            // 执行分析
-            let analyze_args = AnalyzeArgs {
-                input_file: RString::from(match file_to_analyze.to_str() {
-                    Some(s) => s,
-                    None => {
-                        state_clone.add_log(LogLevel::Error, "无效的文件路径");
-                        state_clone.set_phase(WorkflowPhase::Error);
-                        return;
-                    }
-                }),
-                output_dir: RString::from(match config_clone.local.output_dir.to_str() {
-                    Some(s) => s,
-                    None => {
-                        state_clone.add_log(LogLevel::Error, "无效的输出路径");
-                        state_clone.set_phase(WorkflowPhase::Error);
-                        return;
-                    }
-                }),
-                extra_args: None.into(),
-            };
-
-            state_clone.add_log(LogLevel::Info, "解析日志中...");
-
-            let analysis_result = match plugin.plugin.analyze(analyze_args).into_result() {
-                Ok(r) => r,
-                Err(e) => {
-                    state_clone.add_log(LogLevel::Error, format!("分析失败: {}", e));
-                    state_clone.set_phase(WorkflowPhase::Error);
-                    return;
-                }
-            };
-
-            // 统计生成的文件
-            let gantt_count = analysis_result.output_files.iter()
-                .filter(|f| f.file_type == "png" && f.path.contains("gantt"))
-                .count();
-            let csv_count = analysis_result.output_files.iter()
-                .filter(|f| f.file_type == "csv")
-                .count();
-
-            state_clone.add_log(
-                LogLevel::Info,
-                format!("生成 {} 个甘特图, {} 个CSV文件", gantt_count, csv_count)
-            );
-
-            // 显示分析结果
-            state_clone.add_log(LogLevel::Info, "分析完成！");
-            state_clone.add_log(LogLevel::Info, analysis_result.summary.to_string());
-            state_clone.add_log(LogLevel::Info, "生成的文件:");
-            for file in analysis_result.output_files.iter() {
-                state_clone.add_log(
-                    LogLevel::Info,
-                    format!("  - {} ({}): {}", file.path, file.file_type, file.description)
-                );
-            }
-
-            // 解析并显示 major_flow_time_summary.txt（如果存在）
-            let summary_path = config_clone.local.output_dir.join("major_flow_time_summary.txt");
-            if summary_path.exists() {
-                match std::fs::read_to_string(&summary_path) {
-                    Ok(content) => {
-                        // 统计完整和不完整的大流程
-                        let mut complete_count = 0;
-                        let mut incomplete_count = 0;
-                        let mut total_time = 0.0f64;
-                        let mut complete_time = 0.0f64;
-                        let mut complete_flows = Vec::new();
-                        let mut incomplete_flows = Vec::new();
-
-                        for line in content.lines() {
-                            let line = line.trim();
-                            if line.is_empty() {
-                                continue;
-                            }
-
-                            // 解析行：大流程 1 | 完整   | 1097.74秒 | 平均137.22秒/轮 | 10个轮次 | 09:29:18 -> 09:47:36
-                            let parts: Vec<&str> = line.split('|').collect();
-                            if parts.len() < 5 {
-                                continue;
-                            }
-
-                            let flow_name = parts[0].trim();
-                            let status = parts[1].trim();
-                            let time_str = parts[2].trim();
-                            let rounds = parts[4].trim();
-
-                            // 提取时间（秒）
-                            let time_seconds = if let Some(num_str) = time_str.split('秒').next() {
-                                num_str.trim().parse::<f64>().unwrap_or(0.0)
-                            } else {
-                                0.0
-                            };
-
-                            // 提取轮次数
-                            let round_count = if let Some(num_str) = rounds.split('个').next() {
-                                num_str.trim().parse::<usize>().unwrap_or(0)
-                            } else {
-                                0
-                            };
-
-                            // 统计（注意：必须先检查"不完整"，因为它包含"完整"）
-                            if status.contains("不完整") {
-                                incomplete_count += 1;
-                                incomplete_flows.push((flow_name.to_string(), time_seconds, round_count));
-                            } else if status.contains("完整") {
-                                complete_count += 1;
-                                complete_time += time_seconds;
-                                complete_flows.push((flow_name.to_string(), time_seconds, round_count));
-                            }
-                            total_time += time_seconds;
-                        }
-
-                        // 显示摘要
-                        state_clone.add_log(LogLevel::Info, "");
-                        state_clone.add_log(LogLevel::Info, "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-                        state_clone.add_log(LogLevel::Info, "📊 大流程分析摘要");
-                        state_clone.add_log(LogLevel::Info, "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-
-                        // 完整大流程
-                        if complete_count > 0 {
-                            state_clone.add_log(
-                                LogLevel::Info,
-                                format!("✅ 完整大流程: {} 个 (共 {:.1} 分钟)",
-                                    complete_count, complete_time / 60.0)
-                            );
-                            // 只显示前5个
-                            for (name, time, rounds) in complete_flows.iter().take(5) {
-                                state_clone.add_log(
-                                    LogLevel::Info,
-                                    format!("   {} {:.1}分 {}轮",
-                                        name, time / 60.0, rounds)
-                                );
-                            }
-                            if complete_flows.len() > 5 {
-                                state_clone.add_log(
-                                    LogLevel::Info,
-                                    format!("   ... 还有 {} 个完整流程",
-                                        complete_flows.len() - 5)
-                                );
-                            }
-                        }
-
-                        // 不完整大流程
-                        if incomplete_count > 0 {
-                            state_clone.add_log(LogLevel::Info, "");
-                            state_clone.add_log(
-                                LogLevel::Info,
-                                format!("⚠️  不完整大流程: {} 个",
-                                    incomplete_count)
-                            );
-                            // 只显示前3个
-                            for (name, time, rounds) in incomplete_flows.iter().take(3) {
-                                state_clone.add_log(
-                                    LogLevel::Info,
-                                    format!("   {} {:.1}分 {}轮",
-                                        name, time / 60.0, rounds)
-                                );
-                            }
-                            if incomplete_flows.len() > 3 {
-                                state_clone.add_log(
-                                    LogLevel::Info,
-                                    format!("   ... 还有 {} 个不完整流程",
-                                        incomplete_flows.len() - 3)
-                                );
-                            }
-                        }
-
-                        state_clone.add_log(LogLevel::Info, "");
-                        state_clone.add_log(
-                            LogLevel::Info,
-                            format!("⏱️  总用时: {:.1}分 ({:.2}小时)",
-                                total_time / 60.0, total_time / 3600.0)
-                        );
-                        state_clone.add_log(LogLevel::Info, "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-                    }
-                    Err(e) => {
-                        state_clone.add_log(
-                            LogLevel::Warn,
-                            format!("无法读取摘要文件: {}", e)
-                        );
-                    }
-                }
-            }
-
-            state_clone.add_log(LogLevel::Info, "");
-            state_clone.set_phase(WorkflowPhase::Completed);
-            state_clone.mark_completed();
-            state_clone.add_log(LogLevel::Info, "🎉 所有任务完成！");
         });
 
         // 运行 TUI
@@ -710,6 +444,359 @@ fn run_with_tui(config: &AnalyzerConfig) -> Result<()> {
     })?;
 
     Ok(())
+}
+
+/// 执行一次工作流
+#[cfg(feature = "tui")]
+async fn run_workflow_once(state_clone: &AppState, config_clone: &AnalyzerConfig) {
+    use analyzer_tui::state::{LogLevel, WorkflowPhase};
+
+    state_clone.add_log(LogLevel::Info, "开始工作流...");
+    state_clone.set_phase(WorkflowPhase::Initializing);
+
+    // 获取用户选择的插件列表
+    let enabled_plugin_names = state_clone.enabled_plugin_names();
+    state_clone.add_log(LogLevel::Info, format!("已启用 {} 个插件", enabled_plugin_names.len()));
+
+    // 加载用户选择的插件
+    state_clone.add_log(LogLevel::Info, format!("加载插件目录: {}", config_clone.local.plugin_dir.display()));
+    let mut plugin_manager = PluginManager::new();
+    if let Err(e) = plugin_manager.load_plugins(&config_clone.local.plugin_dir) {
+        state_clone.add_log(LogLevel::Error, format!("加载插件失败: {}", e));
+        state_clone.set_phase(WorkflowPhase::Error);
+        return;
+    }
+
+    // 过滤只保留用户选择的插件
+    plugin_manager.plugins.retain(|p| enabled_plugin_names.contains(&p.name));
+
+    state_clone.add_log(LogLevel::Info, format!("成功加载 {} 个插件", plugin_manager.plugins.len()));
+
+    // 在日志中列出插件
+    for plugin in &plugin_manager.plugins {
+        state_clone.add_log(
+            LogLevel::Info,
+            format!("  ✓ {} v{}", plugin.metadata.name, plugin.metadata.version)
+        );
+    }
+
+    if plugin_manager.plugins.is_empty() {
+        state_clone.add_log(LogLevel::Error, "未选择任何插件，无法继续");
+        state_clone.set_phase(WorkflowPhase::Error);
+        return;
+    }
+
+    // 清理旧输出
+    if config_clone.local.cleanup_old_output && config_clone.local.output_dir.exists() {
+        state_clone.add_log(LogLevel::Info, "清理旧输出文件");
+        if let Ok(entries) = fs::read_dir(&config_clone.local.output_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_file() {
+                    let ext = path.extension().and_then(|e| e.to_str());
+                    if matches!(ext, Some("png") | Some("csv")) {
+                        let _ = fs::remove_file(path);
+                    }
+                }
+            }
+        }
+    }
+
+    // 执行自动工作流（手动实现，使用自定义进度回调）
+    use analyzer_remote::{FileTransfer, SshConfig, SshConnection};
+    use analyzer_workflow::discoverer::FileDiscoverer;
+    use analyzer_workflow::selector::PluginSelector;
+
+    state_clone.set_phase(WorkflowPhase::Connecting);
+    state_clone.add_log(LogLevel::Info, "连接到远程服务器...");
+
+    // 1. 连接SSH
+    let ssh_config = SshConfig {
+        host: config_clone.remote.host.clone(),
+        port: config_clone.remote.port,
+        user: config_clone.remote.user.clone(),
+        auth: config_clone.remote.auth.to_auth_method(),
+        timeouts: config_clone.remote.timeouts.clone(),
+    };
+
+    let mut connection = match SshConnection::connect(ssh_config) {
+        Ok(conn) => conn,
+        Err(e) => {
+            state_clone.add_log(LogLevel::Error, format!("SSH连接失败: {}", e));
+            state_clone.set_phase(WorkflowPhase::Error);
+            return;
+        }
+    };
+
+    state_clone.set_phase(WorkflowPhase::Discovering);
+    state_clone.add_log(LogLevel::Info, "发现日志文件...");
+
+    // 2. 发现文件
+    let discoverer = FileDiscoverer::new(config_clone.file_discovery.clone());
+    let selector = PluginSelector::new(config_clone.analyzers.clone());
+
+    let pattern = selector
+        .list_enabled()
+        .first()
+        .map(|m| m.pattern.clone())
+        .unwrap_or_else(|| "*.log".to_string());
+
+    let file_info = match discoverer.discover_and_select_remote(
+        &mut connection,
+        config_clone.remote.log_dir.to_str().unwrap(),
+        &pattern,
+    ) {
+        Ok(file) => file,
+        Err(e) => {
+            state_clone.add_log(LogLevel::Error, format!("文件发现失败: {}", e));
+            state_clone.set_phase(WorkflowPhase::Error);
+            return;
+        }
+    };
+
+    state_clone.add_log(LogLevel::Info, format!("找到文件: {}", file_info.name));
+
+    // 3. 使用自定义回调下载文件
+    let local_path = config_clone.local.log_dir.join(&file_info.name);
+
+    // 确保本地目录存在
+    if let Err(e) = fs::create_dir_all(&config_clone.local.log_dir) {
+        state_clone.add_log(LogLevel::Error, format!("创建目录失败: {}", e));
+        state_clone.set_phase(WorkflowPhase::Error);
+        return;
+    }
+
+    let mut transfer = FileTransfer::new(connection);
+    let progress_callback = TuiProgressCallback::new(state_clone.clone(), file_info.name.clone());
+
+    if let Err(e) = transfer.download_with_callback(&file_info.path, &local_path, Some(progress_callback)) {
+        state_clone.add_log(LogLevel::Error, format!("下载失败: {}", e));
+        state_clone.set_phase(WorkflowPhase::Error);
+        return;
+    }
+
+    // 4. 选择插件
+    let plugin_name = match selector.select_plugin(&file_info.name) {
+        Some(mapping) => mapping.plugin.clone(),
+        None => {
+            state_clone.add_log(LogLevel::Error, "未找到匹配的插件");
+            state_clone.set_phase(WorkflowPhase::Error);
+            return;
+        }
+    };
+
+    let file_to_analyze = local_path;
+
+    // 查找插件
+    let plugin = match plugin_manager.find_by_name(&plugin_name) {
+        Some(p) => p,
+        None => {
+            state_clone.add_log(LogLevel::Error, format!("未找到插件: {}", plugin_name));
+            state_clone.set_phase(WorkflowPhase::Error);
+            return;
+        }
+    };
+
+    state_clone.set_phase(WorkflowPhase::Analyzing);
+    state_clone.add_log(
+        LogLevel::Info,
+        format!("开始分析: {}", file_to_analyze.file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("未知文件"))
+    );
+    state_clone.add_log(
+        LogLevel::Info,
+        format!("使用插件: {} v{}", plugin.metadata.name, plugin.metadata.version)
+    );
+
+    // 执行分析
+    let analyze_args = AnalyzeArgs {
+        input_file: RString::from(match file_to_analyze.to_str() {
+            Some(s) => s,
+            None => {
+                state_clone.add_log(LogLevel::Error, "无效的文件路径");
+                state_clone.set_phase(WorkflowPhase::Error);
+                return;
+            }
+        }),
+        output_dir: RString::from(match config_clone.local.output_dir.to_str() {
+            Some(s) => s,
+            None => {
+                state_clone.add_log(LogLevel::Error, "无效的输出路径");
+                state_clone.set_phase(WorkflowPhase::Error);
+                return;
+            }
+        }),
+        extra_args: None.into(),
+    };
+
+    state_clone.add_log(LogLevel::Info, "解析日志中...");
+
+    let analysis_result = match plugin.plugin.analyze(analyze_args).into_result() {
+        Ok(r) => r,
+        Err(e) => {
+            state_clone.add_log(LogLevel::Error, format!("分析失败: {}", e));
+            state_clone.set_phase(WorkflowPhase::Error);
+            return;
+        }
+    };
+
+    // 统计生成的文件
+    let gantt_count = analysis_result.output_files.iter()
+        .filter(|f| f.file_type == "png" && f.path.contains("gantt"))
+        .count();
+    let csv_count = analysis_result.output_files.iter()
+        .filter(|f| f.file_type == "csv")
+        .count();
+
+    state_clone.add_log(
+        LogLevel::Info,
+        format!("生成 {} 个甘特图, {} 个CSV文件", gantt_count, csv_count)
+    );
+
+    // 显示分析结果
+    state_clone.add_log(LogLevel::Info, "分析完成！");
+    state_clone.add_log(LogLevel::Info, analysis_result.summary.to_string());
+    state_clone.add_log(LogLevel::Info, "生成的文件:");
+    for file in analysis_result.output_files.iter() {
+        state_clone.add_log(
+            LogLevel::Info,
+            format!("  - {} ({}): {}", file.path, file.file_type, file.description)
+        );
+    }
+
+    // 解析并显示 major_flow_time_summary.txt（如果存在）
+    let summary_path = config_clone.local.output_dir.join("major_flow_time_summary.txt");
+    if summary_path.exists() {
+        match std::fs::read_to_string(&summary_path) {
+            Ok(content) => {
+                // 统计完整和不完整的大流程
+                let mut complete_count = 0;
+                let mut incomplete_count = 0;
+                let mut total_time = 0.0f64;
+                let mut complete_time = 0.0f64;
+                let mut complete_flows = Vec::new();
+                let mut incomplete_flows = Vec::new();
+
+                for line in content.lines() {
+                    let line = line.trim();
+                    if line.is_empty() {
+                        continue;
+                    }
+
+                    // 解析行：大流程 1 | 完整   | 1097.74秒 | 平均137.22秒/轮 | 10个轮次 | 09:29:18 -> 09:47:36
+                    let parts: Vec<&str> = line.split('|').collect();
+                    if parts.len() < 5 {
+                        continue;
+                    }
+
+                    let flow_name = parts[0].trim();
+                    let status = parts[1].trim();
+                    let time_str = parts[2].trim();
+                    let rounds = parts[4].trim();
+
+                    // 提取时间（秒）
+                    let time_seconds = if let Some(num_str) = time_str.split('秒').next() {
+                        num_str.trim().parse::<f64>().unwrap_or(0.0)
+                    } else {
+                        0.0
+                    };
+
+                    // 提取轮次数
+                    let round_count = if let Some(num_str) = rounds.split('个').next() {
+                        num_str.trim().parse::<usize>().unwrap_or(0)
+                    } else {
+                        0
+                    };
+
+                    // 统计（注意：必须先检查"不完整"，因为它包含"完整"）
+                    if status.contains("不完整") {
+                        incomplete_count += 1;
+                        incomplete_flows.push((flow_name.to_string(), time_seconds, round_count));
+                    } else if status.contains("完整") {
+                        complete_count += 1;
+                        complete_time += time_seconds;
+                        complete_flows.push((flow_name.to_string(), time_seconds, round_count));
+                    }
+                    total_time += time_seconds;
+                }
+
+                // 显示摘要
+                state_clone.add_log(LogLevel::Info, "");
+                state_clone.add_log(LogLevel::Info, "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+                state_clone.add_log(LogLevel::Info, "📊 大流程分析摘要");
+                state_clone.add_log(LogLevel::Info, "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+
+                // 完整大流程
+                if complete_count > 0 {
+                    state_clone.add_log(
+                        LogLevel::Info,
+                        format!("✅ 完整大流程: {} 个 (共 {:.1} 分钟)",
+                            complete_count, complete_time / 60.0)
+                    );
+                    // 只显示前5个
+                    for (name, time, rounds) in complete_flows.iter().take(5) {
+                        state_clone.add_log(
+                            LogLevel::Info,
+                            format!("   {} {:.1}分 {}轮",
+                                name, time / 60.0, rounds)
+                        );
+                    }
+                    if complete_flows.len() > 5 {
+                        state_clone.add_log(
+                            LogLevel::Info,
+                            format!("   ... 还有 {} 个完整流程",
+                                complete_flows.len() - 5)
+                        );
+                    }
+                }
+
+                // 不完整大流程
+                if incomplete_count > 0 {
+                    state_clone.add_log(LogLevel::Info, "");
+                    state_clone.add_log(
+                        LogLevel::Info,
+                        format!("⚠️  不完整大流程: {} 个",
+                            incomplete_count)
+                    );
+                    // 只显示前3个
+                    for (name, time, rounds) in incomplete_flows.iter().take(3) {
+                        state_clone.add_log(
+                            LogLevel::Info,
+                            format!("   {} {:.1}分 {}轮",
+                                name, time / 60.0, rounds)
+                        );
+                    }
+                    if incomplete_flows.len() > 3 {
+                        state_clone.add_log(
+                            LogLevel::Info,
+                            format!("   ... 还有 {} 个不完整流程",
+                                incomplete_flows.len() - 3)
+                        );
+                    }
+                }
+
+                state_clone.add_log(LogLevel::Info, "");
+                state_clone.add_log(
+                    LogLevel::Info,
+                    format!("⏱️  总用时: {:.1}分 ({:.2}小时)",
+                        total_time / 60.0, total_time / 3600.0)
+                );
+                state_clone.add_log(LogLevel::Info, "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+            }
+            Err(e) => {
+                state_clone.add_log(
+                    LogLevel::Warn,
+                    format!("无法读取摘要文件: {}", e)
+                );
+            }
+        }
+    }
+
+    state_clone.add_log(LogLevel::Info, "");
+    state_clone.set_phase(WorkflowPhase::Completed);
+    state_clone.mark_completed();
+    state_clone.add_log(LogLevel::Info, "🎉 所有任务完成！");
 }
 
 #[cfg(not(feature = "tui"))]

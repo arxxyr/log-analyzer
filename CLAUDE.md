@@ -6,18 +6,20 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 这是一个基于**插件架构**的 **Rust 日志分析框架**。
 
-### v0.3.0 架构（当前版本）
+### v0.3.0-beta.5 架构（当前版本）
 
 项目已演进为完整的工作流分析平台：
 
 - 🔌 **插件系统** - 使用 `abi_stable` 实现 ABI 稳定的插件架构
-- 📦 **Workspace 结构** - 分为核心库、CLI、工作流编排、远程连接、TUI 和插件六层
+- 📦 **Workspace 结构** - 分为核心库、CLI、工作流编排、远程连接、TUI、合并器、可视化器和插件八层
 - 🔄 **动态加载** - 支持运行时加载分析器插件
 - 🛡️ **类型安全** - 保留 Rust 的类型安全和性能优势
 - 🌐 **远程连接** - 内置 SSH 连接和 SCP 文件传输
 - 📝 **配置驱动** - 基于 YAML 配置的工作流编排
 - 🚀 **自动化工作流** - 自动发现、下载、选择插件和分析
-- 🖥️  **TUI 界面** - 可选的交互式终端界面（基于 ratatui）
+- 🖥️  **TUI 界面** - 默认启用的交互式终端界面（基于 ratatui）
+- 📊 **时间线合并** - 多日志源时间轴合并和对齐
+- 🎨 **多泳道可视化** - 统一甘特图生成
 
 ### 核心功能
 
@@ -57,19 +59,25 @@ analyzer/
 │   │       ├── discoverer.rs     # 文件发现
 │   │       ├── selector.rs       # 插件选择
 │   │       └── orchestrator.rs   # 工作流编排
-│   └── analyzer-tui/             # TUI 界面模块（可选）
+│   ├── analyzer-tui/             # TUI 界面模块（默认启用）
+│   │   ├── Cargo.toml
+│   │   └── src/
+│   │       ├── lib.rs            # 模块入口
+│   │       ├── app.rs            # TUI 应用逻辑
+│   │       ├── state.rs          # 应用状态管理
+│   │       ├── ui.rs             # UI 渲染
+│   │       ├── events.rs         # 事件处理
+│   │       └── widgets/          # 自定义组件
+│   │           ├── mod.rs
+│   │           ├── log_viewer.rs    # 日志查看器
+│   │           ├── progress_bar.rs  # 进度条
+│   │           └── status_bar.rs    # 状态栏
+│   ├── analyzer-merger/          # 时间线合并模块
+│   │   ├── Cargo.toml
+│   │   └── src/lib.rs            # 时间轴合并和对齐
+│   └── analyzer-visualizer/      # 可视化模块
 │       ├── Cargo.toml
-│       └── src/
-│           ├── lib.rs            # 模块入口
-│           ├── app.rs            # TUI 应用逻辑
-│           ├── state.rs          # 应用状态管理
-│           ├── ui.rs             # UI 渲染
-│           ├── events.rs         # 事件处理
-│           └── widgets/          # 自定义组件
-│               ├── mod.rs
-│               ├── log_viewer.rs    # 日志查看器
-│               ├── progress_bar.rs  # 进度条
-│               └── status_bar.rs    # 状态栏
+│       └── src/lib.rs            # 多泳道甘特图生成
 ├── plugins/
 │   ├── master-control-analyzer/  # 机器人控制系统日志分析器
 │   │   ├── Cargo.toml            # crate-type = ["cdylib", "rlib"]
@@ -82,10 +90,18 @@ analyzer/
 │   │       ├── csv_exporter.rs
 │   │       └── gantt.rs
 │   └── cpp-demo-analyzer/        # C++ demo 插件示例
-└── docs/
-    ├── PLUGIN_ARCHITECTURE.md    # 插件开发文档
-    ├── WORKFLOW_ARCHITECTURE.md  # 工作流架构文档
-    └── MIGRATION_GUIDE.md        # v0.2.0 -> v0.3.0 迁移指南
+├── docs/
+│   ├── PLUGIN_ARCHITECTURE.md    # 插件开发文档
+│   ├── WORKFLOW_ARCHITECTURE.md  # 工作流架构文档
+│   └── TUI_GUIDE.md              # TUI 使用指南
+├── scripts/
+│   └── test_tui.sh               # TUI 测试脚本
+└── 其他文件
+    ├── analyze.sh                # 旧版 Shell 脚本（兼容层）
+    ├── CHANGES.md                # 变更历史
+    ├── QUICKSTART.md             # 快速开始
+    ├── README.md                 # 用户文档
+    └── SOP.md                    # 标准操作流程
 ```
 
 ## 常用命令
@@ -161,11 +177,20 @@ cargo build --package master-control-analyzer --release
 ./target/release/analyzer
 
 # 快捷键：
+# 全局快捷键：
 #   q/ESC    - 退出
+#   Tab      - 切换焦点（主区域 ⟷ 插件面板）
+#
+# 主区域焦点时（日志查看）：
 #   p/空格   - 暂停/恢复
 #   ↑/↓      - 滚动日志
 #   PgUp/PgDn - 翻页
-#   Home/End  - 跳转首尾
+#   Home     - 回到顶部
+#
+# 插件面板焦点时：
+#   ↑/↓      - 选择插件
+#   空格     - 切换插件启用状态
+#   Enter    - 重启工作流（使用新的插件配置）
 
 # 10. 禁用 TUI（使用 CLI 模式）
 ./target/release/analyzer --no-tui auto
@@ -238,6 +263,11 @@ cargo clippy -- -W clippy::all
 - 定义 `AnalyzerPlugin` trait
 - ABI 稳定的数据结构（`PluginMetadata`, `AnalyzeArgs`, `AnalyzeResult`）
 - 插件模块导出机制
+- 统一的时间线数据结构（`timeline` 模块）
+  - `Timeline`: 单个日志源的时间线
+  - `TimelineEvent`: 时间线事件（包含 ID、泳道、时间、状态、来源等）
+  - `Track`: 泳道类型（RoundMarker、Navigation、Arm、Head、Waist、Custom）
+  - `EventStatus`: 事件状态（Success、Failed、InProgress、Cancelled）
 
 #### 2. analyzer-cli - 主程序
 - 命令行参数解析（使用 `clap`）
@@ -285,14 +315,20 @@ cargo clippy -- -W clippy::all
 - `app.rs` - TUI 应用逻辑
   - `App`: 主应用结构
   - 事件循环和按键处理
+  - 焦点管理和切换
 - `state.rs` - 应用状态管理
   - `AppState`: 线程安全的应用状态（使用 Arc<RwLock>）
   - `WorkflowPhase`: 工作流阶段枚举
+  - `FocusArea`: 焦点区域（Main/PluginPanel）
+  - `PluginDisplayInfo`: 插件显示信息（包含 required 标记）
   - `ProgressInfo`: 进度信息
   - `LogEntry`: 日志条目
+  - 工作流重启支持（`request_restart()`, `reset_for_restart()`）
 - `ui.rs` - UI 渲染
-  - 主界面布局管理
-  - 标题栏、内容区、状态栏渲染
+  - 主界面布局管理（左侧主内容 + 右侧插件面板）
+  - 标题栏、内容区、插件面板、状态栏渲染
+  - 插件面板显示（带焦点状态）
+  - 焦点状态视觉反馈（边框颜色变化）
 - `events.rs` - 事件处理
   - 键盘事件处理
   - 定时刷新机制
@@ -303,10 +339,66 @@ cargo clippy -- -W clippy::all
 
 **特性：**
 - **默认运行模式**：无参数启动即进入 TUI
+- **插件面板**：右侧显示所有插件，支持启用/禁用切换
+  - `✓*` 表示必需且启用的插件
+  - `✓` 表示已启用的插件
+  - `·` 表示未启用的插件
+- **焦点管理**：Tab 键切换主区域和插件面板
+  - 主区域焦点：浏览日志、暂停/恢复工作流
+  - 插件面板焦点：选择插件、切换启用状态、重启工作流
+- **工作流重启**：在插件面板中按 Enter 重启工作流
+  - 使用新的插件配置重新执行完整流程
+  - 自动重置状态和清空日志
 - 实时显示工作流状态和进度
 - 日志实时滚动显示（支持上下滚动、翻页）
 - 支持暂停/恢复操作
-- 快捷键：q/ESC 退出，p/空格 暂停，↑↓滚动，PgUp/PgDn翻页
+- 快捷键提示随焦点区域动态更新
+
+#### 6. analyzer-merger - 时间线合并模块
+**职责：** 合并多个日志源的时间线数据
+
+**主要组件：**
+- `MergeConfig` - 合并配置
+  - 主时间线来源
+  - 时间容差
+  - 对齐策略
+  - 泳道优先级
+- `TimelineMerger` - 时间轴合并器
+  - `merge()`: 合并多个 Timeline
+  - `find_events_in_window()`: 查找时间窗口内的事件
+  - `find_concurrent_events()`: 查找同时发生的事件
+- `MergedTimeline` - 合并结果
+  - 合并后的所有事件
+  - 时间范围
+  - 来源统计
+  - 泳道统计
+
+**特性：**
+- 基于主时间线进行时间对齐
+- 支持时间容差判断事件同时发生
+- 事件自动排序和统计
+- 保持父子事件关系
+
+#### 7. analyzer-visualizer - 可视化模块
+**职责：** 生成统一的多泳道甘特图
+
+**主要组件：**
+- `VisualizationConfig` - 可视化配置
+  - 图片尺寸和边距
+  - 泳道高度和间距
+  - 字体大小
+  - 泳道优先级和颜色映射
+- `GanttChartGenerator` - 甘特图生成器
+  - `generate_gantt_chart()`: 生成多泳道甘特图
+  - 支持自定义泳道顺序和颜色
+  - 自动时间轴标注
+  - 事件标签显示
+
+**特性：**
+- 高分辨率输出（可配置）
+- 支持多个日志源的事件在同一图表中显示
+- 泳道按优先级自动排序
+- 自定义颜色主题
 
 ### 插件模块（Plugins）
 
@@ -570,6 +662,12 @@ logging:
 1. **TUI 界面（v0.3.0+）**:
    - TUI 功能默认启用，无需额外编译参数
    - **直接运行 `./analyzer` 即启动 TUI 界面**（无需参数）
+   - **右侧插件面板**：显示所有插件，支持实时切换启用状态
+     - `✓*` = 必需插件（不可禁用）
+     - `✓` = 已启用
+     - `·` = 未启用
+   - **Tab 键**：切换主区域和插件面板焦点
+   - **Enter 键**：在插件面板焦点时重启工作流（使用新的插件配置）
    - 使用 `--no-tui` 参数强制使用 CLI 模式
    - 如需精简版本，使用 `--no-default-features` 编译
 2. **配置文件（v0.3.0+）**:
@@ -606,17 +704,29 @@ logging:
 
 ## 版本变更
 
-### v0.3.0 重大变更（当前版本）
+### v0.3.0-beta.5 重大变更（当前版本）
 
-1. **远程连接** - 新增 `analyzer-remote` crate，内置 SSH 连接和文件传输
-2. **工作流编排** - 新增 `analyzer-workflow` crate，支持配置驱动的自动化流程
-3. **配置文件** - 引入 YAML 配置文件（`configs/analyzer.yaml`）
-4. **CLI 子命令** - 重构 CLI 接口，支持 `auto`、`analyze`、`list-remote`、`download` 等子命令
-5. **自动化** - 支持自动发现、下载、选择插件和分析的端到端工作流
-6. **插件选择** - 基于文件模式的智能插件选择机制
-7. **TUI 界面** - 新增 `analyzer-tui` crate，提供交互式终端界面（默认启用）
+1. **TUI 界面** - 新增 `analyzer-tui` crate，默认启动交互式终端界面
+2. **插件面板** - 右侧插件面板支持实时切换插件启用状态
+   - 支持必需插件标记（不可禁用）
+   - Tab 键切换焦点区域
+   - 按 Enter 重启工作流使用新配置
+3. **焦点管理** - 主区域和插件面板独立焦点控制
+   - 主区域焦点：日志浏览、暂停/恢复
+   - 插件面板焦点：插件选择、启用/禁用、重启
+4. **工作流重启** - 支持运行时修改插件配置并重启
+   - 自动重置状态和清空日志
+   - 循环执行工作流，支持多次重启
+5. **进度显示** - 完整的下载进度显示（0%-100%）+ 实时进度条
+6. **远程连接** - 新增 `analyzer-remote` crate，内置 SSH 连接和文件传输
+7. **工作流编排** - 新增 `analyzer-workflow` crate，支持配置驱动的自动化流程
+8. **配置文件** - 引入 YAML 配置文件（`configs/analyzer.yaml`）
+9. **CLI 子命令** - 重构 CLI 接口，支持 `auto`、`analyze`、`list-remote`、`download` 等子命令
+10. **自动化** - 支持自动发现、下载、选择插件和分析的端到端工作流
+11. **插件选择** - 基于文件模式的智能插件选择机制
+12. **时间线系统** - 新增 `analyzer-merger` 和 `analyzer-visualizer` crates，支持多日志源合并和统一可视化
 
-**迁移指南:** 详见 [docs/MIGRATION_GUIDE.md](docs/MIGRATION_GUIDE.md)
+**详细变更:** 详见 [CHANGES.md](CHANGES.md)
 
 ### v0.2.0 重大变更
 
@@ -633,8 +743,10 @@ logging:
 
 ## 参考文档
 
-- [TUI 使用指南](docs/TUI_GUIDE.md) - TUI 界面详细使用说明（v0.3.0）
+- [TUI 使用指南](docs/TUI_GUIDE.md) - TUI 界面详细使用说明（v0.3.0-beta.5）
 - [工作流架构文档](docs/WORKFLOW_ARCHITECTURE.md) - 工作流和远程连接架构（v0.3.0）
-- [迁移指南](docs/MIGRATION_GUIDE.md) - 从 v0.2.0 迁移到 v0.3.0
 - [插件架构文档](docs/PLUGIN_ARCHITECTURE.md) - 详细的插件开发指南
 - [README.md](README.md) - 用户使用文档
+- [CHANGES.md](CHANGES.md) - 详细变更历史和版本说明
+- [QUICKSTART.md](QUICKSTART.md) - 快速开始指南
+- [SOP.md](SOP.md) - 标准操作流程

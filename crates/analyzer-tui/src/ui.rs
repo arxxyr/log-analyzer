@@ -1,12 +1,12 @@
 //! UI 渲染逻辑
 
-use crate::state::{AppState, WorkflowPhase};
+use crate::state::{AppState, FocusArea, WorkflowPhase};
 use crate::widgets::{log_viewer, progress_bar, status_bar};
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph},
+    widgets::{Block, Borders, List, ListItem, Paragraph},
     Frame,
 };
 
@@ -27,8 +27,20 @@ pub fn render(frame: &mut Frame, state: &AppState, scroll_offset: u16) {
     // 渲染标题栏
     render_header(frame, chunks[0], state);
 
-    // 渲染内容区
-    render_content(frame, chunks[1], state, scroll_offset);
+    // 内容区分为左右两部分：主内容 | 插件面板
+    let content_chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Min(40),     // 主内容区（最小40列）
+            Constraint::Length(35),  // 插件面板（固定35列）
+        ])
+        .split(chunks[1]);
+
+    // 渲染主内容区
+    render_content(frame, content_chunks[0], state, scroll_offset);
+
+    // 渲染插件面板
+    render_plugin_panel(frame, content_chunks[1], state);
 
     // 渲染状态栏
     status_bar::render(frame, chunks[2], state);
@@ -84,11 +96,20 @@ fn render_content(frame: &mut Frame, area: Rect, state: &AppState, scroll_offset
     let phase = state.phase();
 
     // 内容区分为上下两部分：信息面板 | 日志窗口
+    // 信息面板高度根据插件数量动态调整
+    let plugins_count = state.available_plugins().len();
+    let info_panel_height = if plugins_count > 0 {
+        // 基础4行 + 分隔1行 + 标题1行 + 插件行（最多4行：3个插件 + 省略）
+        (4 + 2 + plugins_count.min(3) + if plugins_count > 3 { 1 } else { 0 }) as u16
+    } else {
+        8 // 没有插件时使用默认高度
+    };
+
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(8), // 信息面板
-            Constraint::Min(0),     // 日志窗口
+            Constraint::Length(info_panel_height), // 信息面板（动态高度）
+            Constraint::Min(0),                     // 日志窗口
         ])
         .split(area);
 
@@ -163,6 +184,39 @@ fn render_info_panel(frame: &mut Frame, area: Rect, state: &AppState) {
         ]));
     }
 
+    // 可用插件列表
+    let plugins = state.available_plugins();
+    if !plugins.is_empty() {
+        lines.push(Line::from("")); // 空行分隔
+        lines.push(Line::from(vec![
+            Span::styled("🔧 可用插件 ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::styled(format!("({})", plugins.len()), Style::default().fg(Color::DarkGray)),
+        ]));
+
+        // 显示前 3 个插件
+        for plugin in plugins.iter().take(3) {
+            let status_icon = if plugin.enabled { "✓" } else { "✗" };
+            let status_color = if plugin.enabled { Color::Green } else { Color::DarkGray };
+
+            lines.push(Line::from(vec![
+                Span::raw("  "),
+                Span::styled(status_icon, Style::default().fg(status_color)),
+                Span::raw(" "),
+                Span::styled(&plugin.name, Style::default().fg(Color::White)),
+                Span::raw(" "),
+                Span::styled(format!("v{}", plugin.version), Style::default().fg(Color::DarkGray)),
+            ]));
+        }
+
+        // 如果有更多插件，显示省略号
+        if plugins.len() > 3 {
+            lines.push(Line::from(vec![
+                Span::raw("  "),
+                Span::styled(format!("... 还有 {} 个插件", plugins.len() - 3), Style::default().fg(Color::DarkGray)),
+            ]));
+        }
+    }
+
     let panel = Paragraph::new(lines)
         .block(
             Block::default()
@@ -227,4 +281,127 @@ fn format_duration(seconds: i64) -> String {
     } else {
         format!("{}时{}分", seconds / 3600, (seconds % 3600) / 60)
     }
+}
+
+/// 渲染插件面板（右侧）
+fn render_plugin_panel(frame: &mut Frame, area: Rect, state: &AppState) {
+    let plugins = state.available_plugins();
+    let selected_index = state.selected_plugin_index();
+    let is_focused = state.focus() == FocusArea::PluginPanel;
+
+    // 边框样式根据焦点状态变化
+    let border_style = if is_focused {
+        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+
+    // 分为两个区域：插件列表 | 帮助提示
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Min(5),     // 插件列表
+            Constraint::Length(6),  // 帮助提示
+        ])
+        .split(area);
+
+    // 渲染插件列表
+    let items: Vec<ListItem> = plugins
+        .iter()
+        .enumerate()
+        .map(|(i, plugin)| {
+            let is_selected = i == selected_index && is_focused;
+            let checkbox = if plugin.enabled {
+                if plugin.required {
+                    "✓*"  // 必需
+                } else {
+                    "✓"
+                }
+            } else {
+                "·"
+            };
+
+            let style = if is_selected {
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD)
+            } else if plugin.enabled {
+                Style::default().fg(Color::Green)
+            } else {
+                Style::default().fg(Color::DarkGray)
+            };
+
+            // 紧凑显示：只显示名称和状态
+            let name = if plugin.name.len() > 28 {
+                format!("{}...", &plugin.name[..25])
+            } else {
+                plugin.name.clone()
+            };
+            let content = format!("{} {}", checkbox, name);
+
+            ListItem::new(content).style(style)
+        })
+        .collect();
+
+    let enabled_count = plugins.iter().filter(|p| p.enabled).count();
+    let title = if is_focused {
+        format!(" 🔧 插件 ({}/{}) [活动] ", enabled_count, plugins.len())
+    } else {
+        format!(" 🔧 插件 ({}/{}) ", enabled_count, plugins.len())
+    };
+
+    let list = List::new(items)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(border_style)
+                .title(title),
+        );
+
+    frame.render_widget(list, chunks[0]);
+
+    // 渲染帮助提示
+    let help_lines = if is_focused {
+        vec![
+            Line::from(vec![
+                Span::styled("↑/↓", Style::default().fg(Color::Yellow)),
+                Span::raw(" 选择"),
+            ]),
+            Line::from(vec![
+                Span::styled("空格", Style::default().fg(Color::Yellow)),
+                Span::raw(" 切换"),
+            ]),
+            Line::from(vec![
+                Span::styled("Enter", Style::default().fg(Color::Green)),
+                Span::raw(" 重启"),
+            ]),
+            Line::from(vec![
+                Span::styled("Tab", Style::default().fg(Color::Cyan)),
+                Span::raw(" 返回主区"),
+            ]),
+        ]
+    } else {
+        vec![
+            Line::from(vec![
+                Span::styled("Tab", Style::default().fg(Color::Cyan)),
+                Span::raw(" 切换到插件面板"),
+            ]),
+            Line::from(""),
+            Line::from(vec![
+                Span::styled("*", Style::default().fg(Color::Yellow)),
+                Span::raw(" = 必需插件"),
+            ]),
+        ]
+    };
+
+    let help = Paragraph::new(help_lines)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::DarkGray))
+                .title(" 快捷键 "),
+        );
+
+    frame.render_widget(help, chunks[1]);
 }

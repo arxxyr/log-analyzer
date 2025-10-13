@@ -110,6 +110,30 @@ impl LogLevel {
     }
 }
 
+/// 插件显示信息（用于 TUI 显示）
+#[derive(Debug, Clone)]
+pub struct PluginDisplayInfo {
+    /// 插件名称
+    pub name: String,
+    /// 版本
+    pub version: String,
+    /// 描述
+    pub description: String,
+    /// 是否已启用
+    pub enabled: bool,
+    /// 是否必需（必需的插件不能被禁用）
+    pub required: bool,
+}
+
+/// 焦点区域
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FocusArea {
+    /// 主区域（日志查看）
+    Main,
+    /// 插件面板
+    PluginPanel,
+}
+
 /// 应用状态（线程安全）
 #[derive(Clone)]
 pub struct AppState {
@@ -119,6 +143,12 @@ pub struct AppState {
 struct AppStateInner {
     /// 当前工作流阶段
     phase: WorkflowPhase,
+    /// 当前焦点区域
+    focus: FocusArea,
+    /// 插件选择：当前选中的索引
+    selected_plugin_index: usize,
+    /// 是否请求重启工作流
+    restart_requested: bool,
     /// 进度信息
     progress: Option<ProgressInfo>,
     /// 日志缓冲区（最多保留1000条）
@@ -127,6 +157,8 @@ struct AppStateInner {
     current_file: Option<String>,
     /// 当前插件名
     current_plugin: Option<String>,
+    /// 可用插件列表
+    available_plugins: Vec<PluginDisplayInfo>,
     /// 错误信息
     error_message: Option<String>,
     /// 开始时间
@@ -149,10 +181,14 @@ impl AppState {
         Self {
             inner: Arc::new(RwLock::new(AppStateInner {
                 phase: WorkflowPhase::Initializing,
+                focus: FocusArea::Main,
+                selected_plugin_index: 0,
+                restart_requested: false,
                 progress: None,
                 logs: VecDeque::with_capacity(1000),
                 current_file: None,
                 current_plugin: None,
+                available_plugins: Vec::new(),
                 error_message: None,
                 start_time: Local::now(),
                 end_time: None,
@@ -271,5 +307,122 @@ impl AppState {
     /// 是否暂停
     pub fn is_paused(&self) -> bool {
         self.inner.read().paused
+    }
+
+    /// 设置可用插件列表
+    pub fn set_available_plugins(&self, plugins: Vec<PluginDisplayInfo>) {
+        self.inner.write().available_plugins = plugins;
+    }
+
+    /// 获取可用插件列表
+    pub fn available_plugins(&self) -> Vec<PluginDisplayInfo> {
+        self.inner.read().available_plugins.clone()
+    }
+
+    /// 设置焦点区域
+    pub fn set_focus(&self, focus: FocusArea) {
+        self.inner.write().focus = focus;
+    }
+
+    /// 获取焦点区域
+    pub fn focus(&self) -> FocusArea {
+        self.inner.read().focus
+    }
+
+    /// 切换焦点
+    pub fn toggle_focus(&self) {
+        let mut inner = self.inner.write();
+        inner.focus = match inner.focus {
+            FocusArea::Main => FocusArea::PluginPanel,
+            FocusArea::PluginPanel => FocusArea::Main,
+        };
+    }
+
+    /// 请求重启工作流
+    pub fn request_restart(&self) {
+        let mut inner = self.inner.write();
+        inner.restart_requested = true;
+    }
+
+    /// 检查是否请求了重启
+    pub fn is_restart_requested(&self) -> bool {
+        self.inner.read().restart_requested
+    }
+
+    /// 清除重启请求
+    pub fn clear_restart_request(&self) {
+        let mut inner = self.inner.write();
+        inner.restart_requested = false;
+    }
+
+    /// 重置状态（用于重启）
+    pub fn reset_for_restart(&self) {
+        let mut inner = self.inner.write();
+        inner.phase = WorkflowPhase::Initializing;
+        inner.progress = None;
+        inner.logs.clear();
+        inner.current_file = None;
+        inner.current_plugin = None;
+        inner.error_message = None;
+        inner.start_time = Local::now();
+        inner.end_time = None;
+        inner.paused = false;
+        inner.restart_requested = false;
+    }
+
+    /// 获取选中的插件索引
+    pub fn selected_plugin_index(&self) -> usize {
+        self.inner.read().selected_plugin_index
+    }
+
+    /// 设置选中的插件索引
+    pub fn set_selected_plugin_index(&self, index: usize) {
+        let mut inner = self.inner.write();
+        if index < inner.available_plugins.len() {
+            inner.selected_plugin_index = index;
+        }
+    }
+
+    /// 选择上一个插件
+    pub fn select_previous_plugin(&self) {
+        let mut inner = self.inner.write();
+        if !inner.available_plugins.is_empty() {
+            if inner.selected_plugin_index > 0 {
+                inner.selected_plugin_index -= 1;
+            } else {
+                inner.selected_plugin_index = inner.available_plugins.len() - 1;
+            }
+        }
+    }
+
+    /// 选择下一个插件
+    pub fn select_next_plugin(&self) {
+        let mut inner = self.inner.write();
+        if !inner.available_plugins.is_empty() {
+            inner.selected_plugin_index = (inner.selected_plugin_index + 1) % inner.available_plugins.len();
+        }
+    }
+
+    /// 切换当前选中插件的启用状态
+    pub fn toggle_selected_plugin(&self) {
+        let mut inner = self.inner.write();
+        let index = inner.selected_plugin_index;
+        if index < inner.available_plugins.len() {
+            let plugin = &mut inner.available_plugins[index];
+            // 必需的插件不能被禁用
+            if !plugin.required {
+                plugin.enabled = !plugin.enabled;
+            }
+        }
+    }
+
+    /// 获取已启用的插件名称列表
+    pub fn enabled_plugin_names(&self) -> Vec<String> {
+        self.inner.read()
+            .available_plugins
+            .iter()
+            .filter(|p| p.enabled)
+            .map(|p| p.name.clone())
+            .collect()
     }
 }
