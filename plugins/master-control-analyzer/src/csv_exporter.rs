@@ -134,7 +134,8 @@ pub fn export_csv(records: &[CsvRecord], outdir: &str) -> Result<()> {
     }
 
     wtr.flush()?;
-    println!("CSV exported to {}/analysis.csv", outdir);
+    // 静默输出，避免在 TUI 模式下刷屏
+    // println!("CSV exported to {}/analysis.csv", outdir);
     Ok(())
 }
 
@@ -205,7 +206,8 @@ pub fn export_major_flow_stats(major_flows: &[MajorFlow], outdir: &str, t0: f64,
     }
 
     wtr.flush()?;
-    println!("Major flow statistics exported to {}", file_path);
+    // 静默输出，避免在 TUI 模式下刷屏
+    // println!("Major flow statistics exported to {}", file_path);
 
     // 导出简单的大流程时间汇总文件（每行一个大流程时间）
     let summary_path = format!("{}/major_flow_time_summary.txt", outdir);
@@ -240,7 +242,8 @@ pub fn export_major_flow_stats(major_flows: &[MajorFlow], outdir: &str, t0: f64,
     }
 
     std::fs::write(&summary_path, summary.join("\n"))?;
-    println!("Major flow time summary exported to {}", summary_path);
+    // 静默输出，避免在 TUI 模式下刷屏
+    // println!("Major flow time summary exported to {}", summary_path);
 
     Ok(())
 }
@@ -396,7 +399,8 @@ pub fn generate_action_timeline_csv(
     }
 
     wtr.flush()?;
-    println!("Action timeline exported to {}", file_path);
+    // 静默输出，避免在 TUI 模式下刷屏
+    // println!("Action timeline exported to {}", file_path);
 
     // 生成简要统计
     let total_actions = all_actions.len();
@@ -442,7 +446,8 @@ pub fn generate_action_timeline_csv(
     );
 
     std::fs::write(&stats_path, stats_content)?;
-    println!("Action timeline stats exported to {}", stats_path);
+    // 静默输出，避免在 TUI 模式下刷屏
+    // println!("Action timeline stats exported to {}", stats_path);
 
     Ok(())
 }

@@ -299,7 +299,7 @@ impl SshConnection {
     }
 
     /// 关闭连接
-    pub fn disconnect(mut self) -> Result<()> {
+    pub fn disconnect(self) -> Result<()> {
         info!("断开 SSH 连接");
         self.session
             .disconnect(None, "正常断开", None)

@@ -11,12 +11,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 项目已演进为完整的工作流分析平台：
 
 - 🔌 **插件系统** - 使用 `abi_stable` 实现 ABI 稳定的插件架构
-- 📦 **Workspace 结构** - 分为核心库、CLI、工作流编排、远程连接和插件五层
+- 📦 **Workspace 结构** - 分为核心库、CLI、工作流编排、远程连接、TUI 和插件六层
 - 🔄 **动态加载** - 支持运行时加载分析器插件
 - 🛡️ **类型安全** - 保留 Rust 的类型安全和性能优势
 - 🌐 **远程连接** - 内置 SSH 连接和 SCP 文件传输
 - 📝 **配置驱动** - 基于 YAML 配置的工作流编排
 - 🚀 **自动化工作流** - 自动发现、下载、选择插件和分析
+- 🖥️  **TUI 界面** - 可选的交互式终端界面（基于 ratatui）
 
 ### 核心功能
 
@@ -48,14 +49,27 @@ analyzer/
 │   │       ├── lib.rs
 │   │       ├── ssh.rs            # SSH 连接管理
 │   │       └── transfer.rs       # 文件传输
-│   └── analyzer-workflow/        # 工作流编排模块
+│   ├── analyzer-workflow/        # 工作流编排模块
+│   │   ├── Cargo.toml
+│   │   └── src/
+│   │       ├── lib.rs
+│   │       ├── config.rs         # 配置管理
+│   │       ├── discoverer.rs     # 文件发现
+│   │       ├── selector.rs       # 插件选择
+│   │       └── orchestrator.rs   # 工作流编排
+│   └── analyzer-tui/             # TUI 界面模块（可选）
 │       ├── Cargo.toml
 │       └── src/
-│           ├── lib.rs
-│           ├── config.rs         # 配置管理
-│           ├── discoverer.rs     # 文件发现
-│           ├── selector.rs       # 插件选择
-│           └── orchestrator.rs   # 工作流编排
+│           ├── lib.rs            # 模块入口
+│           ├── app.rs            # TUI 应用逻辑
+│           ├── state.rs          # 应用状态管理
+│           ├── ui.rs             # UI 渲染
+│           ├── events.rs         # 事件处理
+│           └── widgets/          # 自定义组件
+│               ├── mod.rs
+│               ├── log_viewer.rs    # 日志查看器
+│               ├── progress_bar.rs  # 进度条
+│               └── status_bar.rs    # 状态栏
 ├── plugins/
 │   ├── master-control-analyzer/  # 机器人控制系统日志分析器
 │   │   ├── Cargo.toml            # crate-type = ["cdylib", "rlib"]
@@ -92,6 +106,12 @@ cargo build --package analyzer-cli --release
 cargo build --package analyzer-workflow --release
 cargo build --package analyzer-remote --release
 
+# 构建带 TUI 支持的 CLI（默认启用）
+cargo build --package analyzer-cli --release
+
+# 不带 TUI 的精简版本（可选）
+cargo build --package analyzer-cli --release --no-default-features
+
 # 单独构建插件
 cargo build --package master-control-analyzer --release
 ```
@@ -99,7 +119,10 @@ cargo build --package master-control-analyzer --release
 ### 运行（v0.3.0 子命令方式）
 
 ```bash
-# 1. 自动模式（推荐）- 自动获取最新日志并分析
+# 0. 默认行为 - 启动 TUI 交互式界面（无需参数）
+./target/release/analyzer
+
+# 1. 自动模式 - 自动获取最新日志并分析
 ./target/release/analyzer auto
 
 # 使用自定义配置文件
@@ -132,6 +155,22 @@ cargo build --package master-control-analyzer --release
 
 # 8. 详细日志输出
 ./target/release/analyzer --verbose auto
+
+# 9. TUI 交互式界面模式（默认启用）
+# 直接运行，无需参数
+./target/release/analyzer
+
+# 快捷键：
+#   q/ESC    - 退出
+#   p/空格   - 暂停/恢复
+#   ↑/↓      - 滚动日志
+#   PgUp/PgDn - 翻页
+#   Home/End  - 跳转首尾
+
+# 10. 禁用 TUI（使用 CLI 模式）
+./target/release/analyzer --no-tui auto
+
+# 注意：如果编译时使用 --no-default-features，TUI 将被禁用
 ```
 
 ### 测试
@@ -238,6 +277,36 @@ cargo clippy -- -W clippy::all
 - `orchestrator.rs` - 工作流编排器
   - `WorkflowOrchestrator`: 编排完整分析流程
   - 支持自动模式、指定文件、远程下载等
+
+#### 5. analyzer-tui - TUI 界面模块（默认启用）
+**职责：** 提供交互式终端用户界面
+
+**主要组件：**
+- `app.rs` - TUI 应用逻辑
+  - `App`: 主应用结构
+  - 事件循环和按键处理
+- `state.rs` - 应用状态管理
+  - `AppState`: 线程安全的应用状态（使用 Arc<RwLock>）
+  - `WorkflowPhase`: 工作流阶段枚举
+  - `ProgressInfo`: 进度信息
+  - `LogEntry`: 日志条目
+- `ui.rs` - UI 渲染
+  - 主界面布局管理
+  - 标题栏、内容区、状态栏渲染
+- `events.rs` - 事件处理
+  - 键盘事件处理
+  - 定时刷新机制
+- `widgets/` - 自定义组件
+  - `log_viewer.rs`: 实时日志查看器（支持滚动）
+  - `progress_bar.rs`: 文件下载进度条
+  - `status_bar.rs`: 快捷键提示栏
+
+**特性：**
+- **默认运行模式**：无参数启动即进入 TUI
+- 实时显示工作流状态和进度
+- 日志实时滚动显示（支持上下滚动、翻页）
+- 支持暂停/恢复操作
+- 快捷键：q/ESC 退出，p/空格 暂停，↑↓滚动，PgUp/PgDn翻页
 
 ### 插件模块（Plugins）
 
@@ -498,31 +567,38 @@ logging:
 
 ## 注意事项
 
-1. **配置文件（v0.3.0+）**:
+1. **TUI 界面（v0.3.0+）**:
+   - TUI 功能默认启用，无需额外编译参数
+   - **直接运行 `./analyzer` 即启动 TUI 界面**（无需参数）
+   - 使用 `--no-tui` 参数强制使用 CLI 模式
+   - 如需精简版本，使用 `--no-default-features` 编译
+2. **配置文件（v0.3.0+）**:
    - 使用 YAML 格式配置远程连接、插件映射和工作流
    - 支持多种 SSH 认证方式（密钥文件 > Agent > 密码）
    - 配置文件位置：`configs/analyzer.yaml`
-2. **日志编码**: 程序会自动处理 UTF-8 编码问题，使用 lossy 转换处理无效字符
-3. **时间处理**:
+3. **日志编码**: 程序会自动处理 UTF-8 编码问题，使用 lossy 转换处理无效字符
+4. **时间处理**:
    - 内部使用 Unix 时间戳（秒级精度）
    - 甘特图显示北京时间（UTC+8）
    - CSV 中的时间为相对于日志开始的秒数
-4. **轮次检测**: 基于循环标记（`loop: 开始循环` 和 `loop: 结束当前循环`）自动检测任务轮次
-5. **性能**: 对于大型日志文件（>100MB），建议使用 release 模式构建
-6. **依赖版本**: 使用 Rust edition 2024，主要依赖：
+5. **轮次检测**: 基于循环标记（`loop: 开始循环` 和 `loop: 结束当前循环`）自动检测任务轮次
+6. **性能**: 对于大型日志文件（>100MB），建议使用 release 模式构建
+7. **依赖版本**: 使用 Rust edition 2024，主要依赖：
    - `abi_stable = "0.11"` - ABI 稳定性（核心依赖）
    - `ssh2 = "0.9"` - SSH 连接（v0.3.0+）
    - `serde_yaml = "0.9"` - YAML 配置（v0.3.0+）
    - `plotters` - 图表生成
    - `csv` - 数据导出
    - `regex` - 模式匹配
-7. **模块化设计**: 各模块职责清晰，修改时尽量保持单一职责原则（SRP），避免跨模块耦合
-8. **插件开发**:
+   - `ratatui = "0.29"` - TUI 框架（默认启用）
+   - `tokio = "1.42"` - 异步运行时
+8. **模块化设计**: 各模块职责清晰，修改时尽量保持单一职责原则（SRP），避免跨模块耦合
+9. **插件开发**:
    - 所有插件必须实现 `AnalyzerPlugin` trait
    - 使用 ABI 稳定的类型（`RString`, `RVec`, `RResult` 等）
    - 正确导出根模块（`#[export_root_module]`）
    - 编译为动态库（`crate-type = ["cdylib", "rlib"]`）
-9. **远程连接（v0.3.0+）**:
+10. **远程连接（v0.3.0+）**:
    - SSH 连接使用 `ssh2` 库
    - 支持密钥认证、SSH Agent、密码认证
    - 文件传输支持进度条显示
@@ -538,6 +614,7 @@ logging:
 4. **CLI 子命令** - 重构 CLI 接口，支持 `auto`、`analyze`、`list-remote`、`download` 等子命令
 5. **自动化** - 支持自动发现、下载、选择插件和分析的端到端工作流
 6. **插件选择** - 基于文件模式的智能插件选择机制
+7. **TUI 界面** - 新增 `analyzer-tui` crate，提供交互式终端界面（默认启用）
 
 **迁移指南:** 详见 [docs/MIGRATION_GUIDE.md](docs/MIGRATION_GUIDE.md)
 
@@ -556,6 +633,7 @@ logging:
 
 ## 参考文档
 
+- [TUI 使用指南](docs/TUI_GUIDE.md) - TUI 界面详细使用说明（v0.3.0）
 - [工作流架构文档](docs/WORKFLOW_ARCHITECTURE.md) - 工作流和远程连接架构（v0.3.0）
 - [迁移指南](docs/MIGRATION_GUIDE.md) - 从 v0.2.0 迁移到 v0.3.0
 - [插件架构文档](docs/PLUGIN_ARCHITECTURE.md) - 详细的插件开发指南

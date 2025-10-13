@@ -68,12 +68,12 @@ impl FileTransfer {
         Self { connection }
     }
 
-    /// 下载单个文件
-    pub fn download(
+    /// 下载单个文件（带自定义进度回调）
+    pub fn download_with_callback<P: TransferProgress>(
         &mut self,
         remote_path: &Path,
         local_path: &Path,
-        show_progress: bool,
+        mut progress_callback: Option<P>,
     ) -> Result<()> {
         info!("下载文件: {:?} -> {:?}", remote_path, local_path);
 
@@ -94,10 +94,6 @@ impl FileTransfer {
             )))?;
 
         let file_size = remote_stat.size.unwrap_or(0);
-        let file_name = remote_path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("unknown");
 
         debug!("远程文件大小: {} 字节", file_size);
 
@@ -112,13 +108,6 @@ impl FileTransfer {
         // 创建本地文件
         let mut local_file = File::create(local_path)?;
 
-        // 创建进度条（如果需要）
-        let mut progress: Option<ProgressBarCallback> = if show_progress {
-            Some(ProgressBarCallback::new(file_size, file_name))
-        } else {
-            None
-        };
-
         // 传输文件
         let mut buffer = vec![0u8; 8192]; // 8KB 缓冲区
         let mut total_bytes = 0u64;
@@ -130,25 +119,56 @@ impl FileTransfer {
                     local_file.write_all(&buffer[..n])?;
                     total_bytes += n as u64;
 
-                    if let Some(ref mut p) = progress {
-                        p.on_progress(total_bytes, file_size);
+                    if let Some(ref mut callback) = progress_callback {
+                        callback.on_progress(total_bytes, file_size);
                     }
                 }
                 Err(e) => {
-                    if let Some(ref mut p) = progress {
-                        p.on_error(&e.to_string());
+                    if let Some(ref mut callback) = progress_callback {
+                        callback.on_error(&e.to_string());
                     }
                     return Err(SshError::IoError(e));
                 }
             }
         }
 
-        if let Some(ref mut p) = progress {
-            p.on_complete();
+        if let Some(ref mut callback) = progress_callback {
+            callback.on_complete();
         }
 
         info!("文件下载完成: {} 字节", total_bytes);
         Ok(())
+    }
+
+    /// 下载单个文件（使用默认进度条）
+    pub fn download(
+        &mut self,
+        remote_path: &Path,
+        local_path: &Path,
+        show_progress: bool,
+    ) -> Result<()> {
+        if show_progress {
+            let file_name = remote_path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("unknown");
+
+            // 获取文件大小（用于创建进度条）
+            let sftp = self.connection.sftp()?;
+            let file_size = sftp
+                .stat(remote_path)
+                .map_err(|e| SshError::IoError(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    format!("无法获取远程文件信息: {}", e),
+                )))?
+                .size
+                .unwrap_or(0);
+
+            let progress = ProgressBarCallback::new(file_size, file_name);
+            self.download_with_callback(remote_path, local_path, Some(progress))
+        } else {
+            self.download_with_callback::<ProgressBarCallback>(remote_path, local_path, None)
+        }
     }
 
     /// 批量下载文件

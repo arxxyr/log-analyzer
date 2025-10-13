@@ -7,6 +7,7 @@ members = [
     "crates/analyzer-workflow",
     "crates/analyzer-merger",
     "crates/analyzer-visualizer",
+    "crates/analyzer-tui",
     "plugins/master-control-analyzer",
     "plugins/cpp-demo-analyzer",
 ]
