@@ -82,6 +82,17 @@ fn run_cpp_analysis(input_file: &str, output_dir: &str) -> anyhow::Result<Analyz
         })
         .collect();
     
+    // 创建一个空的时间线（demo 插件不生成真实事件）
+    let timeline = timeline::Timeline {
+        name: "cpp_demo".into(),
+        source_file: input_file.into(),
+        log_start_time: 0.0,
+        log_end_time: 0.0,
+        events: RVec::new(),
+        is_primary: false,
+        metadata: RNone,
+    };
+
     Ok(AnalyzeResult {
         summary: format!(
             "{}\n  - 行数: {}\n  - 轮次: {}",
@@ -89,6 +100,7 @@ fn run_cpp_analysis(input_file: &str, output_dir: &str) -> anyhow::Result<Analyz
         )
         .into(),
         output_files: output_files.into(),
+        timeline,
     })
 }
 

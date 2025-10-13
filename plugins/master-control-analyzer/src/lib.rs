@@ -145,7 +145,7 @@ fn run_analysis_internal(input_file: &str, output_dir: &str) -> Result<AnalyzeRe
     });
 
     // 导出大流程统计
-    export_major_flow_stats(&major_flows, output_dir, t0)?;
+    export_major_flow_stats(&major_flows, output_dir, t0, t_last)?;
     output_files.push(OutputFile {
         path: format!("{}/major_flow_stats.csv", output_dir).into(),
         file_type: "csv".into(),
@@ -178,7 +178,10 @@ fn run_analysis_internal(input_file: &str, output_dir: &str) -> Result<AnalyzeRe
         description: "动作时间轴汇总表".into(),
     });
 
-    // 8. 构建分析摘要
+    // 8. 构建标准化时间线数据
+    let timeline = build_timeline(input_file, &rounds, &flows, t0, t_last)?;
+
+    // 9. 构建分析摘要
     let summary = format!(
         "分析完成！\n\
          - 检测到 {} 个轮次\n\
@@ -201,7 +204,159 @@ fn run_analysis_internal(input_file: &str, output_dir: &str) -> Result<AnalyzeRe
     Ok(AnalyzeResult {
         summary: summary.into(),
         output_files: output_files.into(),
+        timeline,
     })
+}
+
+/// 构建标准化时间线数据
+///
+/// 将 rounds、flows 和 operations 转换为标准的 Timeline 结构
+fn build_timeline(
+    source_file: &str,
+    rounds: &[Round],
+    flows: &[NavigationFlow],
+    log_start_time: f64,
+    log_end_time: f64,
+) -> Result<timeline::Timeline> {
+    use analyzer_core::timeline::*;
+
+    let mut events = Vec::new();
+
+    // 1. 添加轮次标记事件
+    for (idx, round) in rounds.iter().enumerate() {
+        let event = TimelineEvent {
+            id: format!("round_{}", round.id).into(),
+            track: Track::RoundMarker,
+            name: format!("轮次 {}", round.id).into(),
+            start_time: round.start_ts,
+            end_time: round.end_ts.map(|t| t.into()).into(),
+            status: if round.end_ts.is_some() {
+                EventStatus::Success
+            } else {
+                EventStatus::InProgress
+            },
+            source: "master_control".into(),
+            parent_id: RNone,
+            metadata: {
+                let mut meta = serde_json::json!({
+                    "loop_number": round.loop_number,
+                    "round_index": idx,
+                });
+                if let Some(ref pose0) = round.pose0 {
+                    meta["pose0"] = serde_json::json!(pose0);
+                }
+                if let Some(ref pose6) = round.pose6 {
+                    meta["pose6"] = serde_json::json!(pose6);
+                }
+                RSome(meta.to_string().into())
+            },
+            color_hint: RSome("#E8F4F8".into()), // 浅蓝色
+        };
+        events.push(event);
+    }
+
+    // 2. 添加导航流程事件
+    for (flow_idx, flow) in flows.iter().enumerate() {
+        let round_id = format!("round_{}", flow.round_id);
+
+        // 导航主事件
+        if let (Some(nav_start), Some(nav_end)) = (flow.nav_start_ts, flow.nav_end_ts) {
+            let nav_event = TimelineEvent {
+                id: format!("nav_{}", flow_idx).into(),
+                track: Track::Navigation,
+                name: "导航".into(),
+                start_time: nav_start,
+                end_time: RSome(nav_end),
+                status: match flow.nav_status.as_str() {
+                    "成功" => EventStatus::Success,
+                    "失败" => EventStatus::Failed,
+                    "进行中" => EventStatus::InProgress,
+                    _ => EventStatus::Success,
+                },
+                source: "master_control".into(),
+                parent_id: RSome(round_id.clone().into()),
+                metadata: {
+                    let meta = serde_json::json!({
+                        "target_pos": flow.nav_target_pos,
+                        "target_ori": flow.nav_target_ori,
+                        "sub_steps": flow.nav_sub_steps.iter().map(|s| {
+                            serde_json::json!({
+                                "name": s.name,
+                                "timestamp": s.timestamp,
+                            })
+                        }).collect::<Vec<_>>(),
+                    });
+                    RSome(meta.to_string().into())
+                },
+                color_hint: RSome("#ADD8E6".into()), // 浅蓝色
+            };
+            events.push(nav_event);
+        }
+
+        // 3. 添加机械臂、头部、腰部动作事件
+        for (op_idx, op) in flow.operations.iter().enumerate() {
+            if let (Some(start), Some(end)) = (op.start_ts, op.end_ts) {
+                let (track, color) = match op.action_type.as_str() {
+                    "arm" => (Track::Arm, "#90EE90"),       // 浅绿色
+                    "head" => (Track::Head, "#FFB366"),     // 浅橙色
+                    "waist" => (Track::Waist, "#DDA0DD"),   // 浅紫色
+                    _ => continue, // 跳过未知类型
+                };
+
+                let op_event = TimelineEvent {
+                    id: format!("{}_{}_op_{}", op.action_type, flow_idx, op_idx).into(),
+                    track,
+                    name: op.label.clone().into(),
+                    start_time: start,
+                    end_time: RSome(end),
+                    status: match op.status.as_str() {
+                        "成功" | "completed" => EventStatus::Success,
+                        "失败" | "failed" => EventStatus::Failed,
+                        "进行中" | "in_progress" => EventStatus::InProgress,
+                        "取消" | "cancelled" => EventStatus::Cancelled,
+                        _ => EventStatus::Success,
+                    },
+                    source: "master_control".into(),
+                    parent_id: RSome(format!("nav_{}", flow_idx).into()),
+                    metadata: {
+                        let meta = serde_json::json!({
+                            "action_code": op.action_code,
+                            "action_type": op.action_type,
+                            "sub_steps": op.sub_steps.iter().map(|s| {
+                                serde_json::json!({
+                                    "name": s.name,
+                                    "timestamp": s.timestamp,
+                                })
+                            }).collect::<Vec<_>>(),
+                        });
+                        RSome(meta.to_string().into())
+                    },
+                    color_hint: RSome(color.into()),
+                };
+                events.push(op_event);
+            }
+        }
+    }
+
+    // 构建最终的 Timeline
+    let timeline = Timeline {
+        name: "master_control".into(),
+        source_file: source_file.into(),
+        log_start_time,
+        log_end_time,
+        events: events.into(),
+        is_primary: true, // master_control 是主时间轴
+        metadata: {
+            let meta = serde_json::json!({
+                "round_count": rounds.len(),
+                "flow_count": flows.len(),
+                "analyzer_version": env!("CARGO_PKG_VERSION"),
+            });
+            RSome(meta.to_string().into())
+        },
+    };
+
+    Ok(timeline)
 }
 
 // ============================================================================

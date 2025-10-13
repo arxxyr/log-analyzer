@@ -83,16 +83,14 @@ pub fn detect_rounds(lines: &[LogLine], t_last: f64) -> Result<Vec<Round>> {
 /// 包含所有检测到的大流程的向量
 pub fn detect_major_flows(rounds: &[Round]) -> Vec<MajorFlow> {
     let mut major_flows = Vec::new();
-    let mut current_flow_rounds = Vec::new();
+    let mut current_flow_rounds: Vec<Round> = Vec::new();
 
     for round in rounds {
         // 如果有循环编号信息
         if let Some(loop_num) = round.loop_number {
-            current_flow_rounds.push(round.clone());
-
-            // 检测是否达到循环8（完整流程结束）
-            if loop_num == 8 {
-                // 创建大流程
+            // 跳过循环5（通常是空闲或等待轮次）
+            if loop_num == 5 {
+                // 如果当前有流程在进行，先保存它
                 if !current_flow_rounds.is_empty() {
                     let start_ts = current_flow_rounds.first().unwrap().start_ts;
                     let end_ts = current_flow_rounds
@@ -101,9 +99,13 @@ pub fn detect_major_flows(rounds: &[Round]) -> Vec<MajorFlow> {
                         .end_ts
                         .unwrap_or(current_flow_rounds.last().unwrap().start_ts);
                     let duration_s = end_ts - start_ts;
-
-                    // 对于完整流程（包含循环8），平均时间为总时间除以8
-                    let average_round_duration_s = duration_s / 8.0;
+                    let num_rounds = current_flow_rounds.len() as f64;
+                    let average_round_duration_s = duration_s / num_rounds;
+                    let last_loop = current_flow_rounds
+                        .last()
+                        .and_then(|r| r.loop_number)
+                        .map(|n| format!("循环{}", n))
+                        .unwrap_or_else(|| "未知".to_string());
 
                     major_flows.push(MajorFlow {
                         id: major_flows.len() + 1,
@@ -112,21 +114,22 @@ pub fn detect_major_flows(rounds: &[Round]) -> Vec<MajorFlow> {
                         end_ts,
                         duration_s,
                         average_round_duration_s,
-                        is_complete: true, // 到达循环8，是完整流程
-                        failure_point: None,
+                        is_complete: false, // 遇到循环5，流程中断
+                        failure_point: Some(format!("中断于{}", last_loop)),
                     });
 
-                    // 清空当前流程的轮次，准备下一个流程
+                    // 清空，准备新流程
                     current_flow_rounds.clear();
                 }
-            } else if loop_num == 1
-                && !current_flow_rounds.is_empty()
-                && current_flow_rounds.len() > 1
-            {
-                // 如果遇到新的循环1，且之前已有轮次（但未达到循环8），说明上一个流程不完整
-                // 保存不完整的流程（如果需要）
-                if current_flow_rounds.len() >= 2 {
-                    // 至少有2个轮次才创建流程
+                // 跳过循环5，不加入任何流程
+                continue;
+            }
+
+            // 先检测是否为新流程开始（循环1）
+            if loop_num == 1 && !current_flow_rounds.is_empty() {
+                // 遇到新的循环1，且之前已有轮次（但未达到循环8），说明上一个流程不完整
+                // 保存不完整的流程（包括单轮次流程）
+                if current_flow_rounds.len() >= 1 {
                     let start_ts = current_flow_rounds.first().unwrap().start_ts;
                     let end_ts = current_flow_rounds
                         .last()
@@ -154,15 +157,48 @@ pub fn detect_major_flows(rounds: &[Round]) -> Vec<MajorFlow> {
                     });
                 }
 
-                // 开始新的流程
+                // 清空，准备新流程
                 current_flow_rounds.clear();
-                current_flow_rounds.push(round.clone());
+            }
+
+            // 将当前轮次加入流程
+            current_flow_rounds.push(round.clone());
+
+            // 检测是否达到循环8（完整流程结束）
+            if loop_num == 8 {
+                // 创建完整大流程
+                if !current_flow_rounds.is_empty() {
+                    let start_ts = current_flow_rounds.first().unwrap().start_ts;
+                    let end_ts = current_flow_rounds
+                        .last()
+                        .unwrap()
+                        .end_ts
+                        .unwrap_or(current_flow_rounds.last().unwrap().start_ts);
+                    let duration_s = end_ts - start_ts;
+
+                    // 对于完整流程（包含循环8），平均时间为总时间除以8
+                    let average_round_duration_s = duration_s / 8.0;
+
+                    major_flows.push(MajorFlow {
+                        id: major_flows.len() + 1,
+                        rounds: current_flow_rounds.clone(),
+                        start_ts,
+                        end_ts,
+                        duration_s,
+                        average_round_duration_s,
+                        is_complete: true, // 到达循环8，是完整流程
+                        failure_point: None,
+                    });
+
+                    // 清空当前流程的轮次，准备下一个流程
+                    current_flow_rounds.clear();
+                }
             }
         }
     }
 
-    // 处理最后的未完成流程
-    if !current_flow_rounds.is_empty() && current_flow_rounds.len() >= 2 {
+    // 处理最后的未完成流程（包括单轮次流程）
+    if !current_flow_rounds.is_empty() {
         let start_ts = current_flow_rounds.first().unwrap().start_ts;
         let end_ts = current_flow_rounds
             .last()

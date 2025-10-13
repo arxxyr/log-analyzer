@@ -80,7 +80,9 @@ version = "0.3.0"
 dependencies = [
  "abi_stable",
  "analyzer-core",
+ "analyzer-merger",
  "analyzer-remote",
+ "analyzer-visualizer",
  "analyzer-workflow",
  "anyhow",
  "clap",
@@ -104,6 +106,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "analyzer-merger"
+version = "0.3.0"
+dependencies = [
+ "abi_stable",
+ "analyzer-core",
+ "anyhow",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tracing",
+]
+
+[[package]]
 name = "analyzer-remote"
 version = "0.3.0"
 dependencies = [
@@ -114,6 +129,20 @@ dependencies = [
  "tempfile",
  "thiserror",
  "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "analyzer-visualizer"
+version = "0.3.0"
+dependencies = [
+ "abi_stable",
+ "analyzer-core",
+ "analyzer-merger",
+ "anyhow",
+ "chrono",
+ "plotters",
+ "thiserror",
  "tracing",
 ]
 

@@ -66,6 +66,9 @@ use abi_stable::{
     StableAbi,
 };
 
+// 导出时间线模块
+pub mod timeline;
+
 // ============================================================================
 // 核心 Trait 定义
 // ============================================================================
@@ -123,7 +126,7 @@ pub struct AnalyzeArgs {
     pub extra_args: ROption<RString>,
 }
 
-/// 分析结果
+/// 分析结果（v2 - 包含时间线数据）
 #[repr(C)]
 #[derive(Debug, Clone, StableAbi)]
 pub struct AnalyzeResult {
@@ -131,6 +134,8 @@ pub struct AnalyzeResult {
     pub summary: RString,
     /// 生成的输出文件列表
     pub output_files: RVec<OutputFile>,
+    /// 标准化的时间线数据（v2 新增）
+    pub timeline: timeline::Timeline,
 }
 
 /// 输出文件信息

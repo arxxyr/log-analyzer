@@ -7,7 +7,7 @@ use crate::discoverer::{DiscovererError, FileDiscoverer, FileInfo};
 use crate::selector::PluginSelector;
 use analyzer_remote::{FileTransfer, SshConfig, SshConnection};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use thiserror::Error;
 use tracing::{debug, info, warn};
 
@@ -315,28 +315,28 @@ impl WorkflowOrchestrator {
             pattern: pattern.clone(),
         });
 
-        // 优先搜索本地
-        if let Ok(file) = self
-            .discoverer
-            .discover_and_select_local(&self.config.local.log_dir, &pattern)
-        {
-            info!("使用本地文件: {:?}", file.path);
-            return Ok(file);
-        }
-
-        // 搜索远程
+        // 优先搜索远程（如果启用）
         if self.config.remote.enabled && self.remote_connection.is_some() {
             let connection = self.remote_connection.as_mut().unwrap();
-            let file = self
+            if let Ok(file) = self
                 .discoverer
                 .discover_and_select_remote(
                     connection,
                     self.config.remote.log_dir.to_str().unwrap(),
                     &pattern,
                 )
-                .map_err(WorkflowError::from)?;
+            {
+                info!("找到远程文件: {:?}", file.path);
+                return Ok(file);
+            }
+        }
 
-            info!("使用远程文件: {:?}", file.path);
+        // 远程未找到或未启用，搜索本地
+        if let Ok(file) = self
+            .discoverer
+            .discover_and_select_local(&self.config.local.log_dir, &pattern)
+        {
+            info!("使用本地文件: {:?}", file.path);
             return Ok(file);
         }
 
@@ -351,6 +351,35 @@ impl WorkflowOrchestrator {
             return Ok(file_info.path.clone());
         }
 
+        // 确保本地目录存在
+        fs::create_dir_all(&self.config.local.log_dir)?;
+
+        let local_path = self.config.local.log_dir.join(&file_info.name);
+
+        // 检查本地文件是否存在且相同（通过 mtime 和 size 判断）
+        if local_path.exists() {
+            if let Ok(metadata) = fs::metadata(&local_path) {
+                let local_size = metadata.len();
+                let local_mtime = metadata
+                    .modified()
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+
+                // 比较文件大小和修改时间
+                if file_info.size == local_size && file_info.mtime == local_mtime {
+                    info!("本地文件已存在且与远程相同，跳过下载: {:?}", local_path);
+                    return Ok(local_path);
+                } else {
+                    info!(
+                        "本地文件与远程不同 (本地: {}bytes/{}, 远程: {}bytes/{}), 重新下载",
+                        local_size, local_mtime, file_info.size, file_info.mtime
+                    );
+                }
+            }
+        }
+
         info!("下载远程文件: {:?}", file_info.path);
 
         let connection = self
@@ -359,11 +388,6 @@ impl WorkflowOrchestrator {
             .ok_or_else(|| WorkflowError::ConnectionError("未建立连接".to_string()))?;
 
         let mut transfer = FileTransfer::new(connection);
-
-        // 确保本地目录存在
-        fs::create_dir_all(&self.config.local.log_dir)?;
-
-        let local_path = self.config.local.log_dir.join(&file_info.name);
 
         transfer
             .download(

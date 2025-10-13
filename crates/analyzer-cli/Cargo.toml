@@ -16,6 +16,8 @@ analyzer-core = { path = "../analyzer-core" }
 # 工作流编排（新增）
 analyzer-workflow = { path = "../analyzer-workflow" }
 analyzer-remote = { path = "../analyzer-remote" }
+analyzer-merger = { path = "../analyzer-merger" }
+analyzer-visualizer = { path = "../analyzer-visualizer" }
 
 # ABI 稳定性
 abi_stable = { workspace = true }

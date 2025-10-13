@@ -44,30 +44,42 @@ file_discovery:
 
 # 日志模式到插件的映射规则
 analyzers:
-  # 机器人主控日志
+  # 机器人主控日志（必需，作为主时间轴）
   - name: "master-control"
     pattern: "master_control_*.log"
     plugin: "master-control-analyzer"
     description: "机器人主控系统日志分析器"
     enabled: true
+    required: true  # 标记为必需
+    is_primary: true  # 标记为主时间轴
     # 插件特定配置（可选）
     config:
       detect_rounds: true
       generate_gantt: true
 
-  # 导航系统日志（示例，插件暂未实现）
-  - name: "navigation"
-    pattern: "navigation_*.log"
-    plugin: "navigation-analyzer"
-    description: "导航系统日志分析器"
+  # 外部机械臂日志（可选）
+  - name: "external-arm"
+    pattern: "arm_*.log"
+    plugin: "arm-analyzer"
+    description: "外部机械臂日志分析器"
     enabled: false
+    required: false
 
-  # 视觉系统日志（示例）
+  # 外部导航日志（可选）
+  - name: "external-navigation"
+    pattern: "nav_*.log"
+    plugin: "navigation-analyzer"
+    description: "外部导航系统日志分析器"
+    enabled: false
+    required: false
+
+  # 视觉系统日志（可选）
   - name: "vision"
     pattern: "vision_*.log"
     plugin: "vision-analyzer"
     description: "视觉系统日志分析器"
     enabled: false
+    required: false
 
   # 通用日志（兜底）
   - name: "generic"
@@ -75,7 +87,38 @@ analyzers:
     plugin: "generic-analyzer"
     description: "通用日志分析器"
     enabled: false
+    required: false
     priority: -1  # 最低优先级
+
+# 多文件分析配置（v0.4.0 新增）
+multi_file:
+  # 是否启用多文件分析模式
+  enabled: true
+
+  # 自动模式下同时下载的文件模式（按优先级）
+  auto_patterns:
+    - "master_control_*.log"  # 必需
+    - "arm_*.log"             # 可选
+    - "nav_*.log"             # 可选
+
+  # 时间对齐配置
+  alignment:
+    # 主时间轴来源（必须匹配 analyzers 中标记 is_primary: true 的）
+    primary_source: "master-control"
+
+    # 时间容差（秒），用于对齐不同日志
+    time_tolerance: 1.0
+
+    # 对齐策略
+    strategy: "timestamp"  # timestamp(直接时间戳) | event_based(基于事件特征)
+
+  # 泳道优先级（控制甘特图中的显示顺序）
+  track_priority:
+    RoundMarker: 0
+    Navigation: 1
+    Arm: 2
+    Head: 3
+    Waist: 4
 
 # 工作流配置
 workflow:

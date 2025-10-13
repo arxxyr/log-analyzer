@@ -45,6 +45,10 @@ pub struct AnalyzerConfig {
     #[serde(default)]
     pub analyzers: Vec<AnalyzerMapping>,
 
+    /// 多文件分析配置（v0.4.0 新增）
+    #[serde(default)]
+    pub multi_file: MultiFileConfig,
+
     /// 工作流配置
     #[serde(default)]
     pub workflow: WorkflowConfig,
@@ -300,6 +304,14 @@ pub struct AnalyzerMapping {
     #[serde(default = "default_enabled")]
     pub enabled: bool,
 
+    /// 是否必需（多文件模式下，必需的文件不存在会报错）
+    #[serde(default)]
+    pub required: bool,
+
+    /// 是否为主时间轴（用于时间对齐）
+    #[serde(default)]
+    pub is_primary: bool,
+
     /// 优先级（数字越大越优先）
     #[serde(default)]
     pub priority: i32,
@@ -475,6 +487,96 @@ impl Default for AdvancedConfig {
     }
 }
 
+/// 多文件分析配置（v0.4.0 新增）
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct MultiFileConfig {
+    /// 是否启用多文件分析模式
+    #[serde(default = "default_multifile_enabled")]
+    pub enabled: bool,
+
+    /// 自动模式下同时下载的文件模式（按优先级）
+    #[serde(default)]
+    pub auto_patterns: Vec<String>,
+
+    /// 时间对齐配置
+    #[serde(default)]
+    pub alignment: AlignmentConfig,
+
+    /// 泳道优先级（控制甘特图中的显示顺序）
+    #[serde(default)]
+    pub track_priority: std::collections::HashMap<String, i32>,
+}
+
+fn default_multifile_enabled() -> bool {
+    false
+}
+
+impl Default for MultiFileConfig {
+    fn default() -> Self {
+        let mut track_priority = std::collections::HashMap::new();
+        track_priority.insert("RoundMarker".to_string(), 0);
+        track_priority.insert("Navigation".to_string(), 1);
+        track_priority.insert("Arm".to_string(), 2);
+        track_priority.insert("Head".to_string(), 3);
+        track_priority.insert("Waist".to_string(), 4);
+
+        Self {
+            enabled: false,
+            auto_patterns: vec!["master_control_*.log".to_string()],
+            alignment: AlignmentConfig::default(),
+            track_priority,
+        }
+    }
+}
+
+/// 时间对齐配置
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct AlignmentConfig {
+    /// 主时间轴来源（必须匹配 analyzers 中标记 is_primary: true 的）
+    #[serde(default = "default_primary_source")]
+    pub primary_source: String,
+
+    /// 时间容差（秒），用于对齐不同日志
+    #[serde(default = "default_time_tolerance")]
+    pub time_tolerance: f64,
+
+    /// 对齐策略
+    #[serde(default = "default_alignment_strategy")]
+    pub strategy: AlignmentStrategy,
+}
+
+fn default_primary_source() -> String {
+    "master-control".to_string()
+}
+
+fn default_time_tolerance() -> f64 {
+    1.0
+}
+
+fn default_alignment_strategy() -> AlignmentStrategy {
+    AlignmentStrategy::Timestamp
+}
+
+impl Default for AlignmentConfig {
+    fn default() -> Self {
+        Self {
+            primary_source: "master-control".to_string(),
+            time_tolerance: 1.0,
+            strategy: AlignmentStrategy::Timestamp,
+        }
+    }
+}
+
+/// 对齐策略
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum AlignmentStrategy {
+    /// 直接使用时间戳（假设时钟同步）
+    Timestamp,
+    /// 基于事件特征对齐（未来实现）
+    EventBased,
+}
+
 impl Default for AnalyzerConfig {
     fn default() -> Self {
         Self {
@@ -488,10 +590,13 @@ impl Default for AnalyzerConfig {
                     plugin: "master-control-analyzer".to_string(),
                     description: "机器人主控系统日志分析器".to_string(),
                     enabled: true,
+                    required: true,
+                    is_primary: true,
                     priority: 0,
                     config: None,
                 },
             ],
+            multi_file: MultiFileConfig::default(),
             workflow: WorkflowConfig::default(),
             logging: LoggingConfig::default(),
             advanced: AdvancedConfig::default(),

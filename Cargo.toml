@@ -5,6 +5,8 @@ members = [
     "crates/analyzer-cli",
     "crates/analyzer-remote",
     "crates/analyzer-workflow",
+    "crates/analyzer-merger",
+    "crates/analyzer-visualizer",
     "plugins/master-control-analyzer",
     "plugins/cpp-demo-analyzer",
 ]
@@ -36,6 +38,10 @@ regex = "1.12"
 csv = "1.2"
 chrono = { version = "0.4", features = ["serde"] }
 plotters = "0.3"
+
+# 日志记录
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [profile.release]
 opt-level = 3

@@ -8,6 +8,8 @@
 
 use abi_stable::{library::RootModule, std_types::RString};
 use analyzer_core::*;
+use analyzer_merger::{AlignmentStrategy, MergeConfig, TimelineMerger};
+use analyzer_visualizer::{GanttChartGenerator, VisualizationConfig};
 use analyzer_workflow::{AnalyzerConfig, WorkflowOrchestrator};
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
@@ -99,6 +101,21 @@ enum Commands {
 
     /// 验证配置文件
     CheckConfig,
+
+    /// 多文件分析：合并多个日志源并生成统一甘特图
+    Multi {
+        /// 输出目录（覆盖配置文件）
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+
+        /// 输出文件名前缀
+        #[arg(short, long, default_value = "merged")]
+        prefix: String,
+
+        /// 是否自动从远程下载
+        #[arg(long)]
+        auto_download: bool,
+    },
 }
 
 // ============================================================================
@@ -438,12 +455,233 @@ fn main() -> Result<()> {
             run_analysis(plugin, &input_file, &config.local.output_dir)?;
         }
 
+        Some(Commands::Multi {
+            output,
+            prefix,
+            auto_download,
+        }) => {
+            let mut config = config;
+            if let Some(o) = output {
+                config.local.output_dir = o;
+            }
+
+            // 检查多文件分析是否启用
+            if !config.multi_file.enabled {
+                anyhow::bail!("多文件分析未启用，请在配置文件中设置 multi_file.enabled = true");
+            }
+
+            info!("开始多文件分析");
+
+            // 1. 准备文件列表
+            let mut files_to_analyze: Vec<(PathBuf, String)> = Vec::new(); // (file_path, pattern)
+
+            if auto_download && config.remote.enabled {
+                // 从远程下载多个文件
+                let mut orchestrator = WorkflowOrchestrator::new(config.clone())?;
+
+                for pattern in &config.multi_file.auto_patterns {
+                    info!("查找远程文件: {}", pattern);
+                    let remote_files = orchestrator.list_remote_logs(Some(pattern))?;
+
+                    if let Some(file_info) = remote_files.first() {
+                        info!("下载: {}", file_info.name);
+                        let local_path = orchestrator.download_only(&file_info.name)?;
+                        files_to_analyze.push((local_path, pattern.clone()));
+                    } else {
+                        warn!("未找到匹配文件: {}", pattern);
+                    }
+                }
+            } else {
+                // 使用本地文件
+                for pattern in &config.multi_file.auto_patterns {
+                    // 在本地日志目录中查找匹配的文件
+                    if let Ok(entries) = fs::read_dir(&config.local.log_dir) {
+                        for entry in entries.flatten() {
+                            let path = entry.path();
+                            if let Some(file_name) = path.file_name().and_then(|n| n.to_str()) {
+                                if glob_match::glob_match(pattern, file_name) {
+                                    files_to_analyze.push((path.clone(), pattern.clone()));
+                                    info!("找到本地文件: {}", path.display());
+                                    break; // 只取第一个匹配的文件
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if files_to_analyze.is_empty() {
+                anyhow::bail!("未找到任何要分析的文件");
+            }
+
+            info!("共找到 {} 个文件需要分析", files_to_analyze.len());
+
+            // 2. 分析每个文件并收集时间线
+            let mut timelines = Vec::new();
+
+            for (file_path, pattern) in &files_to_analyze {
+                info!("分析文件: {}", file_path.display());
+
+                // 根据 pattern 找到对应的 analyzer 配置
+                let analyzer_mapping = config
+                    .analyzers
+                    .iter()
+                    .find(|a| a.pattern == *pattern)
+                    .context("未找到对应的分析器配置")?;
+
+                // 查找插件
+                let plugin = plugin_manager
+                    .find_by_name(&analyzer_mapping.plugin)
+                    .with_context(|| format!("未找到插件: {}", analyzer_mapping.plugin))?;
+
+                // 准备分析参数
+                let analyze_args = AnalyzeArgs {
+                    input_file: RString::from(file_path.to_str().context("无效的路径")?),
+                    output_dir: RString::from(config.local.output_dir.to_str().context("无效的路径")?),
+                    extra_args: None.into(),
+                };
+
+                // 执行分析
+                let result = plugin
+                    .plugin
+                    .analyze(analyze_args)
+                    .into_result()
+                    .with_context(|| format!("分析文件失败: {}", file_path.display()))?;
+
+                // 收集时间线
+                timelines.push(result.timeline);
+
+                info!("  ✓ 分析完成: {}", result.summary);
+            }
+
+            // 3. 合并时间线
+            info!("合并时间线...");
+
+            let merge_config = MergeConfig {
+                primary_source: config.multi_file.alignment.primary_source.clone(),
+                time_tolerance: config.multi_file.alignment.time_tolerance,
+                alignment_strategy: match config.multi_file.alignment.strategy {
+                    analyzer_workflow::config::AlignmentStrategy::Timestamp => AlignmentStrategy::Timestamp,
+                    analyzer_workflow::config::AlignmentStrategy::EventBased => AlignmentStrategy::EventBased,
+                },
+                track_priority: config.multi_file.track_priority.clone(),
+            };
+
+            let merger = TimelineMerger::new(merge_config);
+            let merged = merger.merge(timelines)?;
+
+            info!("合并完成: {} 个事件", merged.events.len());
+
+            // 4. 生成统一的甘特图
+            let output_path = config
+                .local
+                .output_dir
+                .join(format!("{}_gantt.png", prefix));
+
+            info!("生成甘特图: {}", output_path.display());
+
+            let vis_config = VisualizationConfig::default();
+            let generator = GanttChartGenerator::new(vis_config);
+
+            generator.generate_gantt_chart(
+                &merged,
+                output_path.to_str().context("无效的路径")?,
+                &format!("多文件分析 - {}", prefix),
+            )?;
+
+            println!("\n✓ 多文件分析完成！");
+            println!("  - 分析文件数: {}", files_to_analyze.len());
+            println!("  - 合并事件数: {}", merged.events.len());
+            println!("  - 甘特图: {}", output_path.display());
+        }
+
         None => {
-            // 默认行为：列出插件
-            plugin_manager.list_plugins();
-            println!("\n提示：使用 'analyzer --help' 查看所有命令");
+            // 默认行为：执行 auto 模式
+            info!("未指定命令，默认执行 auto 模式");
+
+            // 清理旧输出
+            if config.local.cleanup_old_output && config.local.output_dir.exists() {
+                info!("清理旧输出文件");
+                for entry in fs::read_dir(&config.local.output_dir)? {
+                    let entry = entry?;
+                    let path = entry.path();
+                    if path.is_file() {
+                        let ext = path.extension().and_then(|e| e.to_str());
+                        if matches!(ext, Some("png") | Some("csv")) {
+                            let _ = fs::remove_file(path);
+                        }
+                    }
+                }
+            }
+
+            // 执行自动工作流
+            let mut orchestrator = WorkflowOrchestrator::new(config.clone())?;
+            let result = orchestrator.run_auto()?;
+
+            if !result.success {
+                error!("工作流执行失败");
+                for err in &result.errors {
+                    error!("  - {}", err);
+                }
+                anyhow::bail!("工作流失败");
+            }
+
+            // 获取分析文件和插件
+            let file_to_analyze = result.analyzed_file.context("未找到要分析的文件")?;
+            let plugin_name = result.selected_plugin.context("未选择插件")?;
+
+            // 查找插件
+            let plugin = plugin_manager
+                .find_by_name(&plugin_name)
+                .with_context(|| format!("未找到插件: {}", plugin_name))?;
+
+            // 执行分析
+            run_analysis(plugin, &file_to_analyze, &config.local.output_dir)?;
         }
     }
 
     Ok(())
+}
+
+// 简单的 glob 匹配实现
+mod glob_match {
+    pub fn glob_match(pattern: &str, text: &str) -> bool {
+        // 简化版的 glob 匹配，支持 * 通配符
+        let pattern_parts: Vec<&str> = pattern.split('*').collect();
+
+        if pattern_parts.len() == 1 {
+            // 没有通配符，直接比较
+            return pattern == text;
+        }
+
+        let mut text_pos = 0;
+
+        for (i, part) in pattern_parts.iter().enumerate() {
+            if part.is_empty() {
+                continue;
+            }
+
+            if i == 0 {
+                // 第一个部分必须在开头
+                if !text.starts_with(part) {
+                    return false;
+                }
+                text_pos = part.len();
+            } else if i == pattern_parts.len() - 1 {
+                // 最后一个部分必须在结尾
+                if !text.ends_with(part) {
+                    return false;
+                }
+            } else {
+                // 中间部分
+                if let Some(pos) = text[text_pos..].find(part) {
+                    text_pos += pos + part.len();
+                } else {
+                    return false;
+                }
+            }
+        }
+
+        true
+    }
 }
