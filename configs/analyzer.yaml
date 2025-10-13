@@ -1,0 +1,115 @@
+# Analyzer 主配置文件
+# 用途：定义远程连接、日志发现规则和插件映射
+
+# 远程连接配置
+remote:
+  enabled: true
+  host: "192.168.4.69"
+  port: 23
+  user: "firefly"
+  # 认证方式（优先级从高到低）
+  auth:
+    # 1. SSH 密钥（推荐）
+    key_file: "~/.ssh/id_rsa"
+    # 2. SSH Agent
+    use_agent: true
+    # 3. 密码（不推荐，可留空由运行时输入）
+    password: ""
+
+  # 日志目录配置
+  log_dir: "/home/firefly/.ros/log"
+
+  # 超时配置（秒）
+  timeouts:
+    connect: 30
+    transfer: 300
+
+# 本地路径配置
+local:
+  log_dir: "./logs"
+  output_dir: "./output"
+  plugin_dir: "./plugins"
+
+  # 是否在分析前清理旧输出
+  cleanup_old_output: true
+
+# 文件发现规则（支持本地和远程）
+file_discovery:
+  # 默认排序方式
+  sort_by: "mtime"  # mtime(修改时间) | name(文件名) | size(文件大小)
+  sort_order: "desc"  # desc(降序) | asc(升序)
+
+  # 自动模式：自动选择最新/最旧的文件
+  auto_select: "latest"  # latest | oldest | none
+
+# 日志模式到插件的映射规则
+analyzers:
+  # 机器人主控日志
+  - name: "master-control"
+    pattern: "master_control_*.log"
+    plugin: "master-control-analyzer"
+    description: "机器人主控系统日志分析器"
+    enabled: true
+    # 插件特定配置（可选）
+    config:
+      detect_rounds: true
+      generate_gantt: true
+
+  # 导航系统日志（示例，插件暂未实现）
+  - name: "navigation"
+    pattern: "navigation_*.log"
+    plugin: "navigation-analyzer"
+    description: "导航系统日志分析器"
+    enabled: false
+
+  # 视觉系统日志（示例）
+  - name: "vision"
+    pattern: "vision_*.log"
+    plugin: "vision-analyzer"
+    description: "视觉系统日志分析器"
+    enabled: false
+
+  # 通用日志（兜底）
+  - name: "generic"
+    pattern: "*.log"
+    plugin: "generic-analyzer"
+    description: "通用日志分析器"
+    enabled: false
+    priority: -1  # 最低优先级
+
+# 工作流配置
+workflow:
+  # 自动下载最新日志
+  auto_download: true
+
+  # 下载后是否自动分析
+  auto_analyze: true
+
+  # 失败重试
+  retry:
+    enabled: true
+    max_attempts: 3
+    delay_seconds: 5
+
+  # 进度显示
+  progress:
+    show_progress_bar: true
+    show_transfer_speed: true
+
+# 日志配置
+logging:
+  level: "info"  # trace | debug | info | warn | error
+  format: "compact"  # compact | full | json
+  output: "stdout"  # stdout | file
+  file: "./analyzer.log"
+
+# 高级选项
+advanced:
+  # 并发下载数量（多个文件时）
+  concurrent_downloads: 2
+
+  # 缓存远程文件列表（秒）
+  cache_remote_list: 60
+
+  # 跳过已分析的文件（根据输出目录判断）
+  skip_analyzed: false

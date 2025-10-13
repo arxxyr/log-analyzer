@@ -1,16 +1,20 @@
-# Analyzer - 通用日志分析器框架
+# Analyzer - 通用日志分析器框架 (v0.3.0)
 
-基于插件架构的日志分析工具，使用 Rust + abi_stable 实现 ABI 稳定的插件系统。
+基于插件架构的日志分析工具，使用 Rust + abi_stable 实现 ABI 稳定的插件系统，支持远程日志获取和自动化工作流。
 
-## 特性
+## ✨ 特性
 
 - 🔌 **插件化架构** - 支持动态加载分析器插件，无需重新编译主程序
 - 🛡️ **ABI 稳定** - 使用 `abi_stable` 确保跨版本二进制兼容性
+- 🌐 **远程连接** - 内置 SSH 连接和 SCP 文件传输，自动下载远程日志
+- 📝 **配置驱动** - 基于 YAML 配置的工作流编排
+- 🚀 **自动化工作流** - 一键完成发现、下载、分析全流程
+- 🎯 **智能插件选择** - 根据文件模式自动选择合适的分析器
 - ⚡ **高性能** - Rust 实现，零开销抽象
-- 🎯 **类型安全** - 保留 Rust 的类型安全特性
+- 🎨 **类型安全** - 保留 Rust 的类型安全特性
 - 📊 **可扩展** - 轻松开发新的分析器插件
 
-## 快速开始
+## 🚀 快速开始
 
 ### 安装
 
@@ -20,34 +24,113 @@ cd master_control_analyzer
 cargo build --release
 ```
 
+### 配置
+
+创建配置文件 `configs/analyzer.yaml`（或使用默认配置）：
+
+```yaml
+remote:
+  enabled: true
+  host: "192.168.4.69"
+  port: 23
+  user: "firefly"
+  auth:
+    use_agent: true
+  log_dir: "/home/firefly/.ros/log"
+
+local:
+  log_dir: "./logs"
+  output_dir: "./output"
+  plugin_dir: "./plugins"
+
+analyzers:
+  - name: "master-control"
+    pattern: "master_control_*.log"
+    plugin: "master-control-analyzer"
+    enabled: true
+```
+
 ### 基本用法
+
+#### 1. 自动模式（推荐）
+
+自动获取最新日志并分析：
+
+```bash
+# 使用默认配置
+./target/release/analyzer auto
+
+# 使用自定义配置
+./target/release/analyzer --config my_config.yaml auto
+```
+
+#### 2. 列出远程日志
+
+```bash
+# 列出所有日志文件
+./target/release/analyzer list-remote
+
+# 按模式过滤
+./target/release/analyzer list-remote "master_control_*.log"
+```
+
+#### 3. 分析本地文件
+
+```bash
+# 自动选择插件
+./target/release/analyzer analyze -i logs/your.log
+
+# 指定插件
+./target/release/analyzer analyze -i logs/your.log --plugin master-control-analyzer
+```
+
+#### 4. 从远程下载并分析
+
+```bash
+./target/release/analyzer analyze -i your.log --remote
+```
+
+#### 5. 仅下载文件
+
+```bash
+./target/release/analyzer download your.log
+```
+
+#### 6. 其他命令
 
 ```bash
 # 列出所有可用插件
-./target/release/analyzer --list
+./target/release/analyzer list-plugins
 
-# 分析日志文件（自动选择插件）
-./target/release/analyzer -i logs/your.log -o output
+# 验证配置文件
+./target/release/analyzer check-config
 
-# 指定插件
-./target/release/analyzer -i logs/your.log -o output --plugin master-control-analyzer
+# 查看帮助
+./target/release/analyzer --help
 ```
 
-## 项目结构
+## 📦 项目结构
 
 ```
 analyzer/
+├── Cargo.toml                    # Workspace 配置（v0.3.0）
+├── configs/
+│   └── analyzer.yaml             # 主配置文件
 ├── crates/
-│   ├── analyzer-core/         # 核心接口库（定义插件 API）
-│   └── analyzer-cli/          # CLI 主程序（插件加载器）
+│   ├── analyzer-core/            # 核心接口库（定义插件 API）
+│   ├── analyzer-cli/             # CLI 主程序（插件加载器）
+│   ├── analyzer-remote/          # 远程连接模块（SSH/SCP）
+│   └── analyzer-workflow/        # 工作流编排模块
 ├── plugins/
-│   └── master-control-analyzer/  # 机器人控制系统日志分析器
-├── docs/
-│   └── PLUGIN_ARCHITECTURE.md    # 插件开发文档
-└── README.md
+│   ├── master-control-analyzer/  # 机器人控制系统日志分析器
+│   └── cpp-demo-analyzer/        # C++ demo 插件示例
+└── docs/
+    ├── PLUGIN_ARCHITECTURE.md    # 插件开发文档
+    ├── WORKFLOW_ARCHITECTURE.md  # 工作流架构文档
+    └── MIGRATION_GUIDE.md        # 迁移指南
 ```
 
-## 内置插件
+## 🔌 内置插件
 
 ### master-control-analyzer
 
@@ -60,19 +143,21 @@ analyzer/
 - ✅ CSV 数据导出
 - ✅ 甘特图可视化
 
-**使用示例：**
+**使用方式：**
 
 ```bash
-cargo run --release -- \
-  --log logs/master_control_xxx.log \
-  --outdir output
+# v0.3.0 推荐方式 - 自动模式
+./target/release/analyzer auto
+
+# 或指定文件
+./target/release/analyzer analyze -i logs/master_control_xxx.log
 ```
 
 **输出文件：**
-- `analysis.csv` - 详细的时序分析数据
-- `major_flow_stats.csv` - 大流程统计
-- `round_XX_gantt.png` - 每个轮次的甘特图
-- `action_timeline.csv` - 动作时间轴汇总
+- `output/analysis.csv` - 详细的时序分析数据
+- `output/major_flow_stats.csv` - 大流程统计
+- `output/round_XX_gantt.png` - 每个轮次的甘特图
+- `output/action_timeline.csv` - 动作时间轴汇总
 
 ## 开发新插件
 
@@ -122,16 +207,62 @@ cargo build --release --package my-analyzer
 cp target/release/libmy_analyzer.so target/release/plugins/
 ```
 
-## 架构
+## 🏗️ 架构
 
-### 核心组件
+### 核心组件（v0.3.0）
+
+```
+┌──────────────────────────────────────┐
+│      analyzer-cli (CLI 入口)         │
+│  - 命令行参数解析                      │
+│  - 配置文件加载                        │
+│  - 插件管理和加载                      │
+│  - 工作流调度                          │
+└────────────┬─────────────────────────┘
+             │
+             ├──────────────────────────────┐
+             │                              │
+┌────────────▼────────────┐  ┌─────────────▼──────────┐
+│  analyzer-workflow       │  │  analyzer-remote       │
+│  (工作流编排)             │◄─┤  (远程连接)            │
+│  - 配置管理               │  │  - SSH 连接管理        │
+│  - 文件发现               │  │  - SCP/SFTP 传输       │
+│  - 插件选择               │  │  - 进度显示            │
+│  - 流程编排               │  └────────────────────────┘
+└────────────┬────────────┘
+             │ 加载插件
+             │
+┌────────────▼────────────┐
+│  analyzer-core           │
+│  (插件接口)               │
+│  - AnalyzerPlugin trait  │
+│  - ABI 稳定类型          │
+└────────────┬────────────┘
+             │ 实现
+             │
+┌────────────▼────────────┐
+│  各类分析器插件           │
+│  - master-control       │
+│  - cpp-demo             │
+│  - (可扩展...)          │
+└─────────────────────────┘
+```
 
 1. **analyzer-core** - 定义 `AnalyzerPlugin` trait 和 ABI 稳定的数据结构
 2. **analyzer-cli** - 主程序，负责：
    - 扫描并加载插件目录
-   - 根据文件扩展名选择合适的插件
-   - 调用插件执行分析
-3. **插件** - 实现 `AnalyzerPlugin` trait 的动态库
+   - 工作流编排调度
+   - 配置文件管理
+3. **analyzer-remote** - 远程连接模块：
+   - SSH 连接管理
+   - SCP 文件传输
+   - 进度显示
+4. **analyzer-workflow** - 工作流编排模块：
+   - 配置管理
+   - 文件发现（本地/远程）
+   - 插件智能选择
+   - 流程编排
+5. **插件** - 实现 `AnalyzerPlugin` trait 的动态库
 
 ### 插件接口
 
@@ -185,16 +316,29 @@ cargo test --package master-control-analyzer
 - **内存占用** - 核心库 < 1MB，每个插件 3-5MB
 - **分析速度** - 取决于具体插件实现
 
-## 依赖
+## 📚 依赖
+
+### 核心依赖
 
 - `abi_stable = "0.11"` - ABI 稳定性
 - `anyhow = "1.0"` - 错误处理
 - `clap = "4.5"` - CLI 参数解析
-- 插件特定依赖（见各插件的 Cargo.toml）
 
-## 开发指南
+### v0.3.0 新增依赖
+
+- `ssh2 = "0.9"` - SSH 连接和文件传输
+- `serde_yaml = "0.9"` - YAML 配置文件解析
+- `tracing = "0.1"` - 结构化日志
+- `indicatif = "0.17"` - 进度条显示
+
+### 插件特定依赖
+
+见各插件的 Cargo.toml（如 `plotters`、`csv`、`regex` 等）
+
+## 🛠️ 开发指南
 
 遵循全局 CLAUDE.md 中的 Rust 编码规范：
+
 - 使用 `snake_case` 命名函数和变量
 - 使用 `UpperCamelCase` 命名类型
 - 优先使用 `&str`/`&[T]` 而非 `String`/`Vec<T>` 作为参数
@@ -231,7 +375,19 @@ MIT OR Apache-2.0
 
 loosqk
 
-## 更新日志
+## 📝 更新日志
+
+### v0.3.0 (2025-10-13) - 当前版本
+
+- 🌐 **远程连接** - 新增 `analyzer-remote` crate，支持 SSH/SCP
+- 🚀 **工作流编排** - 新增 `analyzer-workflow` crate，配置驱动的自动化流程
+- 📝 **YAML 配置** - 引入配置文件系统（`configs/analyzer.yaml`）
+- 🎯 **智能插件选择** - 基于文件模式自动选择分析器
+- 🔧 **CLI 子命令** - 重构为子命令架构（`auto`、`analyze`、`list-remote`、`download` 等）
+- 📊 **进度显示** - 文件传输进度条和详细日志
+- 📖 **完整文档** - 新增工作流架构文档和迁移指南
+
+**迁移指南:** 详见 [docs/MIGRATION_GUIDE.md](docs/MIGRATION_GUIDE.md)
 
 ### v0.2.0 (2025-10-11)
 

@@ -1,0 +1,28 @@
+[package]
+name = "analyzer-remote"
+version = "0.3.0"
+edition = "2024"
+authors = ["loosqk"]
+description = "远程连接和文件传输模块"
+
+[dependencies]
+# SSH 连接和传输
+ssh2 = "0.9"
+
+# 错误处理
+thiserror = "2.0"
+anyhow = "1.0"
+
+# 日志
+tracing = "0.1"
+
+# 序列化（用于配置）
+serde = { version = "1.0", features = ["derive"] }
+
+# 工具
+indicatif = "0.17"  # 进度条
+
+[dev-dependencies]
+# 测试
+tokio = { version = "1", features = ["full"] }
+tempfile = "3.8"

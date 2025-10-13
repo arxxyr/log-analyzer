@@ -1,0 +1,36 @@
+[package]
+name = "analyzer-workflow"
+version = "0.3.0"
+edition = "2024"
+authors = ["loosqk"]
+description = "工作流编排模块：配置管理、文件发现、插件选择"
+
+[dependencies]
+# 核心依赖
+analyzer-core = { path = "../analyzer-core" }
+analyzer-remote = { path = "../analyzer-remote" }
+
+# 序列化
+serde = { version = "1.0", features = ["derive"] }
+serde_yaml = "0.9"
+serde_json = "1.0"
+
+# 文件匹配
+glob = "0.3"
+
+# 错误处理
+thiserror = "2.0"
+anyhow = "1.0"
+
+# 日志
+tracing = "0.1"
+
+# 进度显示
+indicatif = "0.17"
+
+# ABI 稳定（用于插件加载）
+abi_stable = "0.11"
+libloading = "0.8"
+
+[dev-dependencies]
+tempfile = "3.8"

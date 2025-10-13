@@ -13,6 +13,10 @@ path = "src/main.rs"
 # 核心接口
 analyzer-core = { path = "../analyzer-core" }
 
+# 工作流编排（新增）
+analyzer-workflow = { path = "../analyzer-workflow" }
+analyzer-remote = { path = "../analyzer-remote" }
+
 # ABI 稳定性
 abi_stable = { workspace = true }
 
@@ -29,3 +33,8 @@ clap = { workspace = true }
 # 序列化
 serde = { workspace = true }
 serde_json = { workspace = true }
+serde_yaml = "0.9"
+
+# 日志
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
