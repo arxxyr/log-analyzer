@@ -1,200 +1,190 @@
-# Master Control 日志分析标准操作程序 (SOP)
+# 日志分析标准操作程序 (SOP)
 
 ## 目的
-本SOP描述了如何从机器人系统获取master_control日志并进行时序分析的标准流程。
+使用 analyzer 工具从机器人系统获取日志并进行时序分析。
 
 ## 前置条件
-- 已获得编译好的master_control_analyzer二进制文件
-- 拥有目标机器人系统的SSH访问权限
-- 目标系统IP: 192.168.5.9
-- SSH端口: 23
-- 用户名: firefly
-- 确保二进制文件在当前目录: `./master_control_analyzer`
+- 可访问目标机器人系统（默认 SSH 配置见下文）
+- 配置文件：`configs/analyzer.yaml`
 
 ## 快速开始
 
-最简单的使用方式（推荐）：
+### 方式一：TUI 交互式界面（推荐）
+
 ```bash
-# 自动获取并分析最新日志
-./analyze.sh
+# 直接启动 TUI 界面
+./analyzer
 ```
 
-该命令会自动：
-1. 连接到远程系统
-2. 找到最新的master_control日志
+**TUI 操作**：
+- 界面自动显示工作流进度和日志
+- **Tab** 键切换主区域和插件面板
+- 在插件面板中按 **↑/↓** 选择插件，**空格** 切换启用状态
+- 按 **Enter** 重启工作流（使用新的插件配置）
+- 按 **q** 或 **ESC** 退出
+
+### 方式二：自动化命令（一键执行）
+
+```bash
+# 自动获取并分析最新日志
+./analyzer auto
+```
+
+该命令自动完成：
+1. 连接远程系统
+2. 查找最新 master_control 日志
 3. 下载到本地
-4. 运行分析
-5. 生成结果在output目录
+4. 自动选择插件并分析
+5. 生成 CSV 和甘特图到 output 目录
 
-## 详细操作步骤
+## 配置准备
 
-### 1. 查找最新的日志文件
+### 编辑配置文件
+
+配置文件位置：`configs/analyzer.yaml`
+
+```yaml
+# 远程连接配置（按需修改）
+remote:
+  enabled: true
+  host: "192.168.4.69"      # 机器人 IP
+  port: 23                 # SSH 端口
+  user: "firefly"          # SSH 用户名
+  auth:
+    password: "password"
+  log_dir: "/home/firefly/.ros/log"  # 远程日志目录
+```
+
+**认证方式（按优先级）**：
+1. SSH 密钥文件（推荐）
+2. SSH Agent
+3. 密码（不推荐，配置 `password` 字段）
+
+## 常用操作
+
+### 1. 列出远程可用日志
 
 ```bash
-ssh -p 23 firefly@192.168.5.9 "cd /home/firefly/.ros/log && pwd && ls -lrt | grep master"
+# 列出所有日志文件
+./analyzer list-remote
+
+# 使用模式过滤
+./analyzer list-remote "master_control_*.log"
 ```
 
-**预期输出**：
-- 显示当前目录路径 `/home/firefly/.ros/log`
-- 列出所有master_control日志文件，按时间排序
-- 最新的文件在列表底部
-
-**注意事项**：
-- 记录最新日志文件名，格式类似：`master_control_3463_1755747167392.log`
-
-### 2. 下载日志文件到本地
+### 2. 分析本地日志文件
 
 ```bash
-scp -P 23 firefly@192.168.5.9:/home/firefly/.ros/log/<日志文件名> ./
+# 分析指定文件（自动选择插件）
+./analyzer analyze -i logs/your.log
+
+# 手动指定插件
+./analyzer analyze -i logs/your.log --plugin master-control-analyzer
+
+# 自定义输出目录
+./analyzer analyze -i logs/your.log -o ./my_output
 ```
 
-**示例**：
+### 3. 从远程下载并分析
+
 ```bash
-scp -P 23 firefly@192.168.5.9:/home/firefly/.ros/log/master_control_3463_1755747167392.log ./
+# 下载指定文件并分析
+./analyzer analyze -i master_control_*.log --remote
 ```
 
-**预期结果**：
-- 日志文件下载到当前目录
-- 显示传输进度和速度
+### 4. 仅下载文件（不分析）
 
-### 3. 运行分析程序
-
-#### 方法一：使用一键脚本（推荐）
 ```bash
-# 自动获取并分析最新日志
-./analyze.sh
-
-# 分析指定文件
-./analyze.sh master_control_3463_1755747167392.log
+./analyzer download your.log
 ```
 
-#### 方法二：手动运行分析程序
+### 5. 查看分析结果
+
 ```bash
-./master_control_analyzer --log <日志文件名>
-```
+# 进入输出目录
+cd output
 
-**示例**：
-```bash
-./master_control_analyzer --log master_control_3463_1755747167392.log
-```
+# 查看 CSV 数据文件
+head -20 analysis.csv
 
-**预期输出**：
-```
-Detected XX rounds
-Detected XXX navigation flows
-Actions: XXX nav, XXX arm, XXX head, XXX waist
-Generated XXXX CSV records
-CSV exported to output/analysis.csv
-Gantt chart saved: output/round_X_gantt.png
-...
-Analysis complete! Output in: output
-```
+# 列出生成的甘特图
+ls -lh *.png
 
-### 4. 查看分析结果
-
-#### 4.1 CSV数据文件
-```bash
-# 查看CSV文件前10行
-head -10 output/analysis.csv
-
-# 使用Excel或其他表格软件打开
-# 文件位置: output/analysis.csv
-```
-
-#### 4.2 甘特图
-```bash
-# 列出所有生成的甘特图
-ls -lh output/*.png
-
-# 使用图片查看器打开
-# 文件位置: output/round_*_gantt.png
+# 使用图片查看器打开（示例）
+xdg-open round_1_gantt.png   # Linux
+open round_1_gantt.png       # macOS
 ```
 
 ## 输出说明
 
-### CSV文件字段
-- `round_id`: 轮次ID
-- `flow_id`: 导航流程ID
-- `step_type`: 动作类型 (navigation/arm/head/waist)
-- `action_label`: 动作标签
-- `start_rel_s`: 相对开始时间（秒）
-- `end_rel_s`: 相对结束时间（秒）
-- `duration_s`: 持续时间（秒）
-- `status`: 状态 (ok/incomplete/pending)
+### CSV 文件（`output/analysis.csv`）
 
-### 甘特图说明
-- **浅蓝色**: 导航动作
-- **浅绿色**: 机械臂动作
-- **浅橙色**: 头部控制
-- **浅紫色**: 腰部控制
-- **时间格式**: `>X.Xs<` 表示动作耗时
+主要字段：
+- `round_id` - 轮次 ID
+- `flow_id` - 导航流程 ID
+- `step_type` - 动作类型（navigation/arm/head/waist）
+- `action_label` - 动作标签
+- `start_rel_s` / `end_rel_s` - 相对时间（秒）
+- `duration_s` - 持续时间（秒）
+- `status` - 状态（ok/incomplete/pending）
+
+### 甘特图（`output/round_*_gantt.png`）
+
+颜色说明：
+- **浅蓝色** - 导航动作
+- **浅绿色** - 机械臂动作
+- **浅橙色** - 头部控制
+- **浅紫色** - 腰部控制
 
 ## 故障排除
 
-### 问题1：SSH连接失败
-**解决方案**：
-- 检查网络连接：`ping 192.168.5.9`
-- 确认SSH服务运行中
-- 确认端口23开放
-
-### 问题2：日志文件不存在
-**解决方案**：
-- 确认路径正确：`/home/firefly/.ros/log/`
-- 检查是否有读取权限
-- 确认master_control节点已运行并生成日志
-
-### 问题3：分析程序报错"找不到程序"
-**解决方案**：
-- 确认master_control_analyzer二进制文件在当前目录
-- 检查文件权限：`ls -l master_control_analyzer`
-- 添加执行权限：`chmod +x master_control_analyzer`
-
-### 问题4：分析程序运行报错
-**解决方案**：
-- 确认日志格式正确
-- 检查是否有足够的磁盘空间
-- 确认output目录有写入权限
-
-## 批量处理
-
-如需分析多个日志文件：
+### SSH 连接失败
 ```bash
-# 下载多个文件
-for file in file1.log file2.log file3.log; do
-    scp -P 23 firefly@192.168.5.9:/home/firefly/.ros/log/$file ./
+# 检查网络
+ping 192.168.4.69
+
+# 测试 SSH
+ssh -p 23 firefly@192.168.4.69 "echo OK"
+
+# 检查配置文件
+./analyzer check-config
+```
+
+### 插件未找到
+```bash
+# 列出可用插件
+./analyzer list-plugins
+
+# 确认插件已编译
+ls -lh plugins/*.so
+
+# 重新编译插件
+cargo build --package master-control-analyzer --release
+```
+
+### 分析失败
+- 检查日志文件格式是否正确
+- 确认磁盘空间充足
+- 使用 `--verbose` 参数查看详细日志
+
+## 高级用法
+
+### 自定义配置文件
+```bash
+# 使用自定义配置
+./analyzer --config my_config.yaml auto
+```
+
+### 禁用 TUI 界面
+```bash
+# 使用 CLI 模式（无交互式界面）
+./analyzer --no-tui auto
+```
+
+### 批量分析
+```bash
+# 分析 logs 目录下所有日志
+for log in logs/*.log; do
+    ./analyzer analyze -i "$log" -o "output_$(basename $log)"
 done
-
-# 批量分析
-for file in *.log; do
-    ./master_control_analyzer --log $file --outdir output_$file
-done
 ```
-
-## 准备工作
-
-### 获取二进制文件
-如果没有二进制文件，需要先编译：
-```bash
-# 在有Rust环境的机器上编译
-cargo build --release
-cp target/release/master_control_analyzer ./
-```
-
-或直接使用提供的编译好的二进制文件：
-```bash
-# 确保文件有执行权限
-chmod +x master_control_analyzer
-```
-
-## 注意事项
-
-1. **二进制文件**：确保master_control_analyzer在当前目录且有执行权限
-2. **日志文件大小**：大型日志文件（>100MB）可能需要更多处理时间
-3. **时区**：程序输出的北京时间（UTC+8）
-4. **内存使用**：处理超大日志文件时注意系统内存
-5. **输出目录**：默认为`output/`，可通过`--outdir`参数修改
-
-## 相关文档
-- [README.md](README.md) - 项目说明和快速开始
-- [CLAUDE.md](CLAUDE.md) - 代码架构说明
-- [analyze.sh](analyze.sh) - 一键分析脚本
