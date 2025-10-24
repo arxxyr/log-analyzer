@@ -10,9 +10,9 @@ remote:
   # 认证方式（优先级从高到低）
   auth:
     # 1. SSH 密钥（推荐）
-    key_file: "~/.ssh/id_rsa"
+    # key_file: "~/.ssh/id_rsa"
     # 2. SSH Agent
-    use_agent: true
+    # use_agent: true
     # 3. 密码（不推荐，可留空由运行时输入）
     password: ""
 
