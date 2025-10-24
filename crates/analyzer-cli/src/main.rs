@@ -358,48 +358,18 @@ fn run_with_tui(config: &AnalyzerConfig) -> Result<()> {
     // 创建 TUI 应用状态
     let app_state = AppState::new();
 
-    // 预先加载所有插件信息（但不实际加载）
-    let plugin_dir = &config.local.plugin_dir;
+    // 从配置文件构建插件显示列表（不实际加载动态库，避免重复加载）
     let mut potential_plugins = Vec::new();
 
-    if plugin_dir.exists() {
-        for entry in fs::read_dir(plugin_dir)? {
-            let entry = entry?;
-            let path = entry.path();
-
-            if let Some(ext) = path.extension() {
-                #[cfg(target_os = "linux")]
-                let is_lib = ext == "so";
-                #[cfg(target_os = "macos")]
-                let is_lib = ext == "dylib";
-                #[cfg(target_os = "windows")]
-                let is_lib = ext == "dll";
-
-                if is_lib {
-                    // 尝试读取插件元数据
-                    if let Ok(module) = AnalyzerPluginModule_Ref::load_from_file(&path) {
-                        let plugin = module.create_plugin()();
-                        let metadata = plugin.metadata();
-
-                        // 检查配置文件中是否标记为必需或默认启用
-                        let plugin_name = metadata.name.to_string();
-                        let analyzer_config = config.analyzers.iter()
-                            .find(|a| a.plugin == plugin_name);
-
-                        let is_required = analyzer_config.map(|a| a.required).unwrap_or(false);
-                        let is_enabled = analyzer_config.map(|a| a.enabled).unwrap_or(true);
-
-                        potential_plugins.push(PluginDisplayInfo {
-                            name: plugin_name.clone(),
-                            version: metadata.version.to_string(),
-                            description: metadata.description.to_string(),
-                            enabled: is_enabled,
-                            required: is_required,
-                        });
-                    }
-                }
-            }
-        }
+    // 遍历配置文件中的分析器定义
+    for analyzer in &config.analyzers {
+        potential_plugins.push(PluginDisplayInfo {
+            name: analyzer.plugin.clone(),
+            version: "unknown".to_string(), // 版本信息将在实际加载时获取
+            description: analyzer.description.clone(),
+            enabled: analyzer.enabled,
+            required: analyzer.required,
+        });
     }
 
     // 设置可用插件列表
