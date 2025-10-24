@@ -2,3 +2,4 @@
 output
 *.log
 logs
+bin/*
