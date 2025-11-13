@@ -16,6 +16,9 @@ use anyhow::Result;
 use plotters::prelude::*;
 use std::collections::HashMap;
 
+mod font_loader;
+use font_loader::FontLoader;
+
 /// 可视化配置
 #[derive(Debug, Clone)]
 pub struct VisualizationConfig {
@@ -118,6 +121,9 @@ impl GanttChartGenerator {
             anyhow::bail!("没有事件可以可视化");
         }
 
+        // 创建字体加载器
+        let font_loader = FontLoader::default();
+
         tracing::info!("开始生成甘特图: {}", output_path);
         tracing::info!("事件总数: {}", merged.events.len());
 
@@ -149,7 +155,7 @@ impl GanttChartGenerator {
 
         // 6. 创建主图表区域
         let mut chart = ChartBuilder::on(&root)
-            .caption(title, ("sans-serif", self.config.font_size))
+            .caption(title, font_loader.font_desc(self.config.font_size as i32))
             .margin(5)
             .x_label_area_size(self.config.margin_bottom)
             .y_label_area_size(self.config.margin_left)
@@ -208,7 +214,7 @@ impl GanttChartGenerator {
                     chart.draw_series(std::iter::once(Text::new(
                         label_text,
                         (label_x, label_y),
-                        ("sans-serif", 12).into_font().color(&BLACK),
+                        font_loader.font_desc(12).color(&BLACK),
                     )))?;
                 }
             }

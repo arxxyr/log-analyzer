@@ -8,6 +8,7 @@ use anyhow::Result;
 use plotters::prelude::*;
 use plotters::style::text_anchor::{HPos, Pos, VPos};
 
+use crate::font_loader::FontLoader;
 use crate::models::{NavigationFlow, Round, SubStep};
 use crate::utils::timestamp_to_beijing_time;
 
@@ -64,6 +65,9 @@ fn generate_round_gantt(
     t0: f64,
     width: usize,
 ) -> Result<()> {
+    // 创建字体加载器
+    let font_loader = FontLoader::default();
+
     let _round_start = round.start_ts - t0;
     let round_duration = round.end_ts.map(|end| end - round.start_ts).unwrap_or(0.0);
 
@@ -318,10 +322,10 @@ fn generate_round_gantt(
         }
 
         // 在动作起点添加时间标注
-        draw_time_label(&mut chart, *start, y_pos, y_height)?;
+        draw_time_label(&mut chart, &font_loader, *start, y_pos, y_height)?;
 
         // 在主方块顶部添加主标签
-        draw_main_label(&mut chart, detail_info, *start, *duration, y_pos, step_type)?;
+        draw_main_label(&mut chart, &font_loader, detail_info, *start, *duration, y_pos, step_type)?;
     }
 
     chart
@@ -420,6 +424,7 @@ fn draw_time_label<DB: DrawingBackend>(
         DB,
         Cartesian2d<plotters::coord::types::RangedCoordf64, plotters::coord::types::RangedCoordf64>,
     >,
+    font_loader: &FontLoader,
     start: f64,
     y_pos: f64,
     y_height: f64,
@@ -431,8 +436,7 @@ where
     chart.draw_series(std::iter::once(Text::new(
         start_time_text,
         (start, y_pos + y_height + 0.25),
-        ("sans-serif", 14)
-            .into_font()
+        font_loader.font_desc(14)
             .color(&BLACK)
             .pos(Pos::new(HPos::Left, VPos::Top))
             .transform(FontTransform::None),
@@ -447,6 +451,7 @@ fn draw_main_label<DB: DrawingBackend>(
         DB,
         Cartesian2d<plotters::coord::types::RangedCoordf64, plotters::coord::types::RangedCoordf64>,
     >,
+    font_loader: &FontLoader,
     detail_info: &str,
     start: f64,
     duration: f64,
@@ -504,8 +509,7 @@ where
         chart.draw_series(std::iter::once(Text::new(
             label_text,
             (text_x, text_y),
-            ("sans-serif", font_size)
-                .into_font()
+            font_loader.font_desc(font_size)
                 .color(&BLACK)
                 .pos(Pos::new(HPos::Center, VPos::Top))
                 .transform(FontTransform::None),

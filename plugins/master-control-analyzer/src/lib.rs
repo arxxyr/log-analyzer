@@ -20,6 +20,7 @@ use anyhow::Result;
 // 模块声明
 pub mod csv_exporter;
 pub mod flow_detector;
+mod font_loader;
 pub mod gantt;
 pub mod models;
 pub mod parser;
@@ -375,6 +376,19 @@ pub fn get_root_module() -> AnalyzerPluginModule_Ref {
 /// 创建插件实例的工厂函数
 #[sabi_extern_fn]
 pub fn create_plugin() -> AnalyzerPlugin_TO<'static, RBox<()>> {
+    // 初始化字体（提取嵌入的字体）
+    use crate::font_loader::FontLoader;
+    match FontLoader::new() {
+        Ok(loader) => {
+            if let Some(path) = loader.font_path() {
+                eprintln!("[master-control-analyzer] 字体已准备: {:?}", path);
+            }
+        }
+        Err(e) => {
+            eprintln!("[master-control-analyzer] 字体初始化失败: {}", e);
+        }
+    }
+
     AnalyzerPlugin_TO::from_value(MasterControlAnalyzer, TD_Opaque)
 }
 
