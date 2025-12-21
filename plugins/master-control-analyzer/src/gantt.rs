@@ -127,6 +127,13 @@ fn generate_round_gantt(
                     }
                     "head" => (format!("F{}-head", flow_id), "头部控制".to_string()),
                     "waist" => (format!("F{}-waist", flow_id), "腰部控制".to_string()),
+                    "preplan" => {
+                        let action_code = operation.action_code.unwrap_or(0);
+                        (
+                            format!("F{}-preplan-{}", flow_id, action_code),
+                            format!("预打舵(action={})", action_code),
+                        )
+                    }
                     _ => (
                         format!("F{}-{}", flow_id, operation.action_type),
                         operation.label.clone(),
@@ -175,6 +182,7 @@ fn generate_round_gantt(
     // 定义动作类型的顺序和显示名称
     let type_order = vec![
         ("navigation", "导航"),
+        ("preplan", "预打舵"),
         ("arm", "机械臂"),
         ("head", "头部控制"),
         ("waist", "腰部控制"),
@@ -201,7 +209,12 @@ fn generate_round_gantt(
         }
     }
 
-    let filename = format!("{}/round_{:0width$}_gantt.png", outdir, round.id, width = width);
+    let filename = format!(
+        "{}/round_{:0width$}_gantt.png",
+        outdir,
+        round.id,
+        width = width
+    );
     let canvas_width = 3600; // 更高分辨率
     let bar_height = 180; // 增加条形高度
     let canvas_height = (action_types.len() * bar_height + 400) as u32;
@@ -259,6 +272,7 @@ fn generate_round_gantt(
     for (_label, detail_info, start, duration, step_type, sub_steps) in &chart_data {
         let base_color = match step_type.as_str() {
             "nav" | "navigation" => RGBColor(173, 216, 230), // 浅蓝色 - 导航
+            "preplan" => RGBColor(255, 255, 150),            // 浅黄色 - 预打舵
             "arm" => RGBColor(144, 238, 144),                // 浅绿色 - 机械臂
             "head" => RGBColor(255, 218, 185),               // 浅橙色 - 头部控制
             "waist" => RGBColor(221, 160, 221),              // 浅紫色 - 腰部控制
@@ -269,9 +283,7 @@ fn generate_round_gantt(
         let y_base = *action_type_map.get(step_type).unwrap() as f64;
 
         // 找到第一个可用的层（结束时间早于当前动作开始时间）
-        let layers = type_action_layers
-            .entry(step_type.clone())
-            .or_default();
+        let layers = type_action_layers.entry(step_type.clone()).or_default();
 
         let mut layer_idx = 0;
         let mut found_layer = false;
@@ -325,7 +337,15 @@ fn generate_round_gantt(
         draw_time_label(&mut chart, &font_loader, *start, y_pos, y_height)?;
 
         // 在主方块顶部添加主标签
-        draw_main_label(&mut chart, &font_loader, detail_info, *start, *duration, y_pos, step_type)?;
+        draw_main_label(
+            &mut chart,
+            &font_loader,
+            detail_info,
+            *start,
+            *duration,
+            y_pos,
+            step_type,
+        )?;
     }
 
     chart
@@ -436,7 +456,8 @@ where
     chart.draw_series(std::iter::once(Text::new(
         start_time_text,
         (start, y_pos + y_height + 0.25),
-        font_loader.font_desc(14)
+        font_loader
+            .font_desc(14)
             .color(&BLACK)
             .pos(Pos::new(HPos::Left, VPos::Top))
             .transform(FontTransform::None),
@@ -482,6 +503,7 @@ where
             "{} ({:.1}s)",
             match step_type {
                 "nav" | "navigation" => "导航",
+                "preplan" => "预打舵",
                 "arm" => "机械臂",
                 "head" => "头部",
                 "waist" => "腰部",
@@ -509,7 +531,8 @@ where
         chart.draw_series(std::iter::once(Text::new(
             label_text,
             (text_x, text_y),
-            font_loader.font_desc(font_size)
+            font_loader
+                .font_desc(font_size)
                 .color(&BLACK)
                 .pos(Pos::new(HPos::Center, VPos::Top))
                 .transform(FontTransform::None),

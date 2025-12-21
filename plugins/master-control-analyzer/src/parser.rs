@@ -43,12 +43,13 @@ pub fn load_log_lines(log_path: &str) -> Result<Vec<LogLine>> {
 
     for line in content.lines() {
         if let Some(caps) = ts_regex.captures(line)
-            && let Ok(timestamp) = caps[1].parse::<f64>() {
-                lines.push(LogLine {
-                    timestamp,
-                    line: line.to_string(),
-                });
-            }
+            && let Ok(timestamp) = caps[1].parse::<f64>()
+        {
+            lines.push(LogLine {
+                timestamp,
+                line: line.to_string(),
+            });
+        }
     }
 
     // 按时间戳排序

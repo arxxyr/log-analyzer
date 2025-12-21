@@ -54,13 +54,14 @@ pub fn detect_rounds(lines: &[LogLine], t_last: f64) -> Result<Vec<Round>> {
 
         // 收集姿态信息
         if let Some(ref mut round) = current
-            && let Some(caps) = pose_regex.captures(&line.line) {
-                if round.pose0.is_none() {
-                    round.pose0 = Some(caps[1].to_string());
-                } else if round.pose6.is_none() {
-                    round.pose6 = Some(caps[1].to_string());
-                }
+            && let Some(caps) = pose_regex.captures(&line.line)
+        {
+            if round.pose0.is_none() {
+                round.pose0 = Some(caps[1].to_string());
+            } else if round.pose6.is_none() {
+                round.pose6 = Some(caps[1].to_string());
             }
+        }
     }
 
     // 最后一轮处理
@@ -214,9 +215,7 @@ pub fn detect_major_flows(rounds: &[Round]) -> Vec<MajorFlow> {
             .and_then(|r| r.loop_number)
             .map(|n| format!("循环{}", n))
             .unwrap_or_else(|| "未知".to_string());
-        let is_complete = current_flow_rounds
-            .last()
-            .and_then(|r| r.loop_number) == Some(8);
+        let is_complete = current_flow_rounds.last().and_then(|r| r.loop_number) == Some(8);
 
         major_flows.push(MajorFlow {
             id: major_flows.len() + 1,
@@ -253,8 +252,9 @@ pub fn ts_to_round_id(ts: f64, rounds: &[Round]) -> usize {
         }
     }
     if let Some(last_round) = rounds.last()
-        && ts >= last_round.end_ts.unwrap_or(0.0) {
-            return last_round.id;
-        }
+        && ts >= last_round.end_ts.unwrap_or(0.0)
+    {
+        return last_round.id;
+    }
     0
 }

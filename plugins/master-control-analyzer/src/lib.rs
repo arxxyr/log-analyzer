@@ -28,9 +28,7 @@ pub mod round_detector;
 pub mod utils;
 
 // 重新导出常用类型
-pub use models::{
-    ActionOperation, CsvRecord, LogLine, MajorFlow, NavigationFlow, Round, SubStep,
-};
+pub use models::{ActionOperation, CsvRecord, LogLine, MajorFlow, NavigationFlow, Round, SubStep};
 
 // ============================================================================
 // 插件实现
@@ -164,8 +162,13 @@ fn run_analysis_internal(input_file: &str, output_dir: &str) -> Result<AnalyzeRe
             1
         };
         output_files.push(OutputFile {
-            path: format!("{}/round_{:0width$}_gantt.png", output_dir, round.id, width = width)
-                .into(),
+            path: format!(
+                "{}/round_{:0width$}_gantt.png",
+                output_dir,
+                round.id,
+                width = width
+            )
+            .into(),
             file_type: "png".into(),
             description: format!("轮次 {} 甘特图", round.id).into(),
         });
@@ -298,10 +301,10 @@ fn build_timeline(
         for (op_idx, op) in flow.operations.iter().enumerate() {
             if let (Some(start), Some(end)) = (op.start_ts, op.end_ts) {
                 let (track, color) = match op.action_type.as_str() {
-                    "arm" => (Track::Arm, "#90EE90"),       // 浅绿色
-                    "head" => (Track::Head, "#FFB366"),     // 浅橙色
-                    "waist" => (Track::Waist, "#DDA0DD"),   // 浅紫色
-                    _ => continue, // 跳过未知类型
+                    "arm" => (Track::Arm, "#90EE90"),     // 浅绿色
+                    "head" => (Track::Head, "#FFB366"),   // 浅橙色
+                    "waist" => (Track::Waist, "#DDA0DD"), // 浅紫色
+                    _ => continue,                        // 跳过未知类型
                 };
 
                 let op_event = TimelineEvent {
@@ -367,10 +370,7 @@ fn build_timeline(
 // 在插件中导出根模块，使用 analyzer-core 中定义的类型
 #[export_root_module]
 pub fn get_root_module() -> AnalyzerPluginModule_Ref {
-    AnalyzerPluginModule {
-        create_plugin,
-    }
-    .leak_into_prefix()
+    AnalyzerPluginModule { create_plugin }.leak_into_prefix()
 }
 
 /// 创建插件实例的工厂函数
@@ -427,9 +427,10 @@ mod tests {
         let plugin = MasterControlAnalyzer;
         let meta = plugin.metadata();
         assert_eq!(meta.name.as_str(), "master-control-analyzer");
-        assert!(meta
-            .supported_extensions
-            .iter()
-            .any(|ext| ext.as_str() == ".log"));
+        assert!(
+            meta.supported_extensions
+                .iter()
+                .any(|ext| ext.as_str() == ".log")
+        );
     }
 }

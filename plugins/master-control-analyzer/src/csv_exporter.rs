@@ -146,7 +146,12 @@ pub fn export_csv(records: &[CsvRecord], outdir: &str) -> Result<()> {
 /// * `outdir` - 输出目录
 /// * `t0` - 起始时间戳
 /// * `t_last` - 日志最后时间戳（用于判断流程是否还在运行）
-pub fn export_major_flow_stats(major_flows: &[MajorFlow], outdir: &str, t0: f64, t_last: f64) -> Result<()> {
+pub fn export_major_flow_stats(
+    major_flows: &[MajorFlow],
+    outdir: &str,
+    t0: f64,
+    t_last: f64,
+) -> Result<()> {
     let file_path = format!("{}/major_flow_stats.csv", outdir);
     let mut wtr = csv::Writer::from_path(&file_path)?;
 

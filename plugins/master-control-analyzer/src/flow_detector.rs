@@ -72,6 +72,15 @@ pub fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<Navigatio
     let waist_end_regex =
         Regex::new(r"\[腰部\]:\s*WaistAction2?\[WaistAction2?\]\s*-\s*执行完成，结果:")?;
 
+    // 预打舵相关正则
+    let preplan_start_regex =
+        Regex::new(r"\[预打舵\]:\s*PrePlanNavigation\[([^\]]+)\]\s*-\s*开始执行")?;
+    let preplan_target_regex = Regex::new(
+        r"\[预打舵\]:\s*设置预打舵目标:\s*pos\(([^)]+)\),\s*ori\(([^)]+)\)\s+action:\s*(\d+)",
+    )?;
+    let preplan_response_regex =
+        Regex::new(r"\[预打舵\]:\s*PrePlanNavigation 响应:\s*error_code=(\d+)")?;
+
     let mut flows = Vec::new();
     let mut current_flow: Option<NavigationFlow> = None;
 
@@ -107,14 +116,15 @@ pub fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<Navigatio
         // 导航目标设置
         if let Some(caps) = nav_target_regex.captures(&line.line) {
             if let Some(ref mut flow) = current_flow
-                && flow.nav_target_pos.is_none() {
-                    flow.nav_target_pos = Some(caps[1].replace(' ', ""));
-                    flow.nav_target_ori = Some(caps[2].replace(' ', ""));
-                    flow.nav_sub_steps.push(SubStep {
-                        name: "设置导航目标".to_string(),
-                        timestamp: line.timestamp,
-                    });
-                }
+                && flow.nav_target_pos.is_none()
+            {
+                flow.nav_target_pos = Some(caps[1].replace(' ', ""));
+                flow.nav_target_ori = Some(caps[2].replace(' ', ""));
+                flow.nav_sub_steps.push(SubStep {
+                    name: "设置导航目标".to_string(),
+                    timestamp: line.timestamp,
+                });
+            }
             continue;
         }
 
@@ -325,6 +335,96 @@ pub fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<Navigatio
 
         if waist_end_regex.is_match(&line.line) {
             finish_action(&mut current_flow, &mut flows, "waist", line.timestamp);
+            continue;
+        }
+
+        // === 预打舵处理 ===
+        if let Some(caps) = preplan_start_regex.captures(&line.line) {
+            let action_label = caps[1].to_string();
+            let preplan_action = ActionOperation {
+                action_type: "preplan".to_string(),
+                action_code: None,
+                label: format!("预打舵[{}]", action_label),
+                start_ts: Some(line.timestamp),
+                end_ts: None,
+                status: "pending".to_string(),
+                sub_steps: vec![SubStep {
+                    name: "开始执行".to_string(),
+                    timestamp: line.timestamp,
+                }],
+            };
+            add_action_to_flow(&mut current_flow, &mut flows, preplan_action);
+            continue;
+        }
+
+        if let Some(caps) = preplan_target_regex.captures(&line.line) {
+            let pos = caps[1].replace(' ', "");
+            let _ori = caps[2].replace(' ', "");
+            let action_code: u32 = caps[3].parse().unwrap_or(0);
+
+            // 更新最近的预打舵动作的 action_code 和添加子步骤
+            if let Some(flow) = current_flow.as_mut() {
+                for op in flow.operations.iter_mut().rev() {
+                    if op.action_type == "preplan" && op.end_ts.is_none() {
+                        op.action_code = Some(action_code);
+                        op.sub_steps.push(SubStep {
+                            name: format!("设置目标→{}", pos),
+                            timestamp: line.timestamp,
+                        });
+                        break;
+                    }
+                }
+            } else if let Some(flow) = flows.last_mut() {
+                for op in flow.operations.iter_mut().rev() {
+                    if op.action_type == "preplan" && op.end_ts.is_none() {
+                        op.action_code = Some(action_code);
+                        op.sub_steps.push(SubStep {
+                            name: format!("设置目标→{}", pos),
+                            timestamp: line.timestamp,
+                        });
+                        break;
+                    }
+                }
+            }
+            continue;
+        }
+
+        if let Some(caps) = preplan_response_regex.captures(&line.line) {
+            let error_code = caps[1].trim();
+            // 预打舵响应即为完成（它是异步请求，不等待结果）
+            if let Some(flow) = current_flow.as_mut() {
+                for op in flow.operations.iter_mut().rev() {
+                    if op.action_type == "preplan" && op.end_ts.is_none() {
+                        op.sub_steps.push(SubStep {
+                            name: format!("响应(code={})", error_code),
+                            timestamp: line.timestamp,
+                        });
+                        op.end_ts = Some(line.timestamp);
+                        op.status = if error_code == "10" {
+                            "ok".to_string()
+                        } else {
+                            format!("error_{}", error_code)
+                        };
+                        break;
+                    }
+                }
+            } else if let Some(flow) = flows.last_mut() {
+                for op in flow.operations.iter_mut().rev() {
+                    if op.action_type == "preplan" && op.end_ts.is_none() {
+                        op.sub_steps.push(SubStep {
+                            name: format!("响应(code={})", error_code),
+                            timestamp: line.timestamp,
+                        });
+                        op.end_ts = Some(line.timestamp);
+                        op.status = if error_code == "10" {
+                            "ok".to_string()
+                        } else {
+                            format!("error_{}", error_code)
+                        };
+                        break;
+                    }
+                }
+            }
             continue;
         }
     }

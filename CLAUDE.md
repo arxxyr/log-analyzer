@@ -502,11 +502,17 @@ cargo clippy -- -W clippy::all
    - 开始: `[腰部]: WaistAction2[WaistAction2] - 开始执行`
    - 完成: `[腰部]: WaistAction2[WaistAction2] - 执行完成，结果:`
 
+5. **预打舵 (PrePlanNavigation)**
+   - 开始: `[预打舵]: PrePlanNavigation[pre] - 开始执行`
+   - 目标设置: `[预打舵]: 设置预打舵目标: pos(x,y,z), ori(x,y,z,w)  action: <代码>,  first_dir: <值>,  rotate_mode: <值>`
+   - 响应: `[预打舵]: PrePlanNavigation 响应: error_code=<代码>, error_msg=<消息>`
+
 ### 输出文件
 
 - `output/analysis.csv`: 包含所有操作的详细时序数据
 - `output/round_N_gantt.png`: 每个轮次的甘特图（分辨率 2800px）
   - 浅蓝色: 导航动作
+  - 浅黄色: 预打舵
   - 浅绿色: 机械臂动作
   - 浅橙色: 头部控制
   - 浅紫色: 腰部控制

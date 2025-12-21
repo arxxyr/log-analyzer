@@ -4,9 +4,9 @@
 # 远程连接配置
 remote:
   enabled: true
-  host: "192.168.4.69"
+  host: "192.168.5.103"
   port: 23
-  user: "firefly"
+  user: "linux"
   # 认证方式（优先级从高到低）
   auth:
     # 1. SSH 密钥（推荐）
@@ -14,10 +14,10 @@ remote:
     # 2. SSH Agent
     # use_agent: true
     # 3. 密码（不推荐，可留空由运行时输入）
-    password: ""
+    password: "linux"
 
   # 日志目录配置
-  log_dir: "/home/firefly/.ros/log"
+  log_dir: "/home/linux/.ros/log"
 
   # 超时配置（秒）
   timeouts:

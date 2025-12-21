@@ -178,7 +178,10 @@ impl FontLoader {
     #[allow(dead_code)]
     pub fn status(&self) -> String {
         if self.is_available() {
-            format!("使用嵌入字体: Sarasa Term SC Nerd ({}字节)", self.font_size())
+            format!(
+                "使用嵌入字体: Sarasa Term SC Nerd ({}字节)",
+                self.font_size()
+            )
         } else {
             "使用系统默认字体（嵌入字体不可用）".to_string()
         }
