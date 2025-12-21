@@ -507,6 +507,18 @@ cargo clippy -- -W clippy::all
    - 目标设置: `[预打舵]: 设置预打舵目标: pos(x,y,z), ori(x,y,z,w)  action: <代码>,  first_dir: <值>,  rotate_mode: <值>`
    - 响应: `[预打舵]: PrePlanNavigation 响应: error_code=<代码>, error_msg=<消息>`
 
+6. **机械臂决策 (arm_decision)**
+   - 自动检测同目录下的 `arm_decision*.log` 文件
+   - 任务开始: `[rclcpp]: Received goal.`
+   - BodyTask 开始: `[rclcpp]: ==============BodyTask start=============`
+   - 模块分隔: `[rclcpp]: --------------------`
+   - 模块名称: `[rclcpp]: <ModuleName> tick!`（如 GetTaskTypeAction, ModifyArmObstacleAction 等）
+   - 模块耗时: `[rclcpp]: cost(s): <耗时>`
+   - 模块完成: `[rclcpp]: <ModuleName> ok.`
+   - BodyTask 结束: `[rclcpp]: ===============BodyTask end===============`
+   - 任务结束: `[rclcpp]: result->status: <状态码>` 和 `[rclcpp]: result->message: <消息>`
+   - 关联规则: 只有时间范围与 master_control 轮次重叠的任务才会显示在甘特图中
+
 ### 输出文件
 
 - `output/analysis.csv`: 包含所有操作的详细时序数据
@@ -514,6 +526,7 @@ cargo clippy -- -W clippy::all
   - 浅蓝色: 导航动作
   - 浅黄色: 预打舵
   - 浅绿色: 机械臂动作
+  - 淡绿色: 机械臂决策 (arm_decision)
   - 浅橙色: 头部控制
   - 浅紫色: 腰部控制
   - 灰色: 其他动作

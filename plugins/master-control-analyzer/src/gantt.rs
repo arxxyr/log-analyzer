@@ -8,8 +8,9 @@ use anyhow::Result;
 use plotters::prelude::*;
 use plotters::style::text_anchor::{HPos, Pos, VPos};
 
+use crate::arm_decision_detector::get_tasks_for_round;
 use crate::font_loader::FontLoader;
-use crate::models::{NavigationFlow, Round, SubStep};
+use crate::models::{ArmDecisionTask, NavigationFlow, Round, SubStep};
 use crate::utils::timestamp_to_beijing_time;
 
 /// 生成所有轮次的甘特图
@@ -17,11 +18,13 @@ use crate::utils::timestamp_to_beijing_time;
 /// # 参数
 /// * `flows` - 导航流程切片
 /// * `rounds` - 轮次切片
+/// * `arm_decision_tasks` - arm_decision 任务切片
 /// * `outdir` - 输出目录
 /// * `t0` - 起始时间戳
 pub fn generate_gantt_charts(
     flows: &[NavigationFlow],
     rounds: &[Round],
+    arm_decision_tasks: &[ArmDecisionTask],
     outdir: &str,
     t0: f64,
 ) -> Result<()> {
@@ -42,9 +45,12 @@ pub fn generate_gantt_charts(
     };
 
     for round in rounds {
-        if let Some(round_flows_data) = round_flows.get(&round.id) {
-            generate_round_gantt(round, round_flows_data, outdir, t0, width)?;
-        }
+        let round_flows_data = round_flows
+            .get(&round.id)
+            .map(|v| v.as_slice())
+            .unwrap_or(&[]);
+        let round_arm_tasks = get_tasks_for_round(arm_decision_tasks, round.id);
+        generate_round_gantt(round, round_flows_data, &round_arm_tasks, outdir, t0, width)?;
     }
 
     Ok(())
@@ -55,12 +61,14 @@ pub fn generate_gantt_charts(
 /// # 参数
 /// * `round` - 轮次
 /// * `flows` - 属于该轮次的导航流程列表
+/// * `arm_decision_tasks` - 属于该轮次的 arm_decision 任务
 /// * `outdir` - 输出目录
 /// * `t0` - 起始时间戳
 /// * `width` - 编号宽度（用于前导零）
 fn generate_round_gantt(
     round: &Round,
     flows: &[&NavigationFlow],
+    arm_decision_tasks: &[&ArmDecisionTask],
     outdir: &str,
     t0: f64,
     width: usize,
@@ -152,6 +160,40 @@ fn generate_round_gantt(
         }
     }
 
+    // 添加 arm_decision 任务到图表数据
+    for (task_idx, task) in arm_decision_tasks.iter().enumerate() {
+        // 使用 BodyTask 的时间范围作为主任务条
+        if let (Some(body_start), Some(body_end)) = (task.body_task_start_ts, task.body_task_end_ts)
+        {
+            let task_start = body_start - round.start_ts;
+            let task_duration = body_end - body_start;
+
+            // 主任务条（整个 BodyTask）
+            let task_type_str = task.task_type.map(|t| t.to_string()).unwrap_or_default();
+            let label = format!("arm_decision_{}", task_idx);
+            let detail_info = format!("arm_decision(type={})", task_type_str);
+
+            // 构建子步骤（从模块信息）
+            let sub_steps: Vec<SubStep> = task
+                .modules
+                .iter()
+                .map(|m| SubStep {
+                    name: m.name.clone(),
+                    timestamp: m.start_ts,
+                })
+                .collect();
+
+            chart_data.push((
+                label,
+                detail_info,
+                task_start.max(0.0),
+                task_duration.max(0.0),
+                "arm_decision".to_string(),
+                sub_steps,
+            ));
+        }
+    }
+
     if chart_data.is_empty() {
         return Ok(());
     }
@@ -184,6 +226,7 @@ fn generate_round_gantt(
         ("navigation", "导航"),
         ("preplan", "预打舵"),
         ("arm", "机械臂"),
+        ("arm_decision", "机械臂决策"),
         ("head", "头部控制"),
         ("waist", "腰部控制"),
     ];
@@ -274,6 +317,7 @@ fn generate_round_gantt(
             "nav" | "navigation" => RGBColor(173, 216, 230), // 浅蓝色 - 导航
             "preplan" => RGBColor(255, 255, 150),            // 浅黄色 - 预打舵
             "arm" => RGBColor(144, 238, 144),                // 浅绿色 - 机械臂
+            "arm_decision" => RGBColor(152, 251, 152),       // 淡绿色 - 机械臂决策
             "head" => RGBColor(255, 218, 185),               // 浅橙色 - 头部控制
             "waist" => RGBColor(221, 160, 221),              // 浅紫色 - 腰部控制
             _ => RGBColor(192, 192, 192),                    // 灰色 - 其他
@@ -505,6 +549,7 @@ where
                 "nav" | "navigation" => "导航",
                 "preplan" => "预打舵",
                 "arm" => "机械臂",
+                "arm_decision" => "决策",
                 "head" => "头部",
                 "waist" => "腰部",
                 _ => "动作",

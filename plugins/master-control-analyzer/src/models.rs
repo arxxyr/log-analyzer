@@ -100,6 +100,46 @@ pub struct MajorFlow {
     pub failure_point: Option<String>,
 }
 
+/// arm_decision 任务中的子模块
+#[derive(Debug, Clone)]
+pub struct ArmDecisionModule {
+    /// 模块名称（如 GetTaskTypeAction, ModifyArmObstacleAction 等）
+    pub name: String,
+    /// cmd_code
+    pub cmd_code: Option<u32>,
+    /// 开始时间戳
+    pub start_ts: f64,
+    /// 结束时间戳
+    pub end_ts: Option<f64>,
+    /// 耗时（秒）- 从日志中的 cost(s) 提取
+    pub cost_s: Option<f64>,
+    /// 状态（ok/pending）
+    pub status: String,
+}
+
+/// arm_decision 完整任务（从 Received goal 到 result->message）
+#[derive(Debug, Clone)]
+pub struct ArmDecisionTask {
+    /// 任务开始时间戳（Received goal）
+    pub start_ts: f64,
+    /// 任务结束时间戳（result->message）
+    pub end_ts: Option<f64>,
+    /// BodyTask 开始时间戳
+    pub body_task_start_ts: Option<f64>,
+    /// BodyTask 结束时间戳
+    pub body_task_end_ts: Option<f64>,
+    /// task_type（如 2000, 2015 等）
+    pub task_type: Option<u32>,
+    /// 结果状态码
+    pub result_status: Option<i32>,
+    /// 结果消息
+    pub result_message: Option<String>,
+    /// 子模块列表
+    pub modules: Vec<ArmDecisionModule>,
+    /// 关联的轮次 ID（如果在某个轮次时间范围内）
+    pub round_id: Option<usize>,
+}
+
 /// CSV记录结构
 #[derive(Debug, Serialize)]
 pub struct CsvRecord {
