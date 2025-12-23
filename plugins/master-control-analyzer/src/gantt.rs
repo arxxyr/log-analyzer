@@ -622,12 +622,13 @@ where
     Ok(())
 }
 
-/// 从子步骤名称中提取简短的模块名称
-/// 例如: "ExecuteGripperMotionAction (0.51s)" -> "Gripper(0.51s)"
+/// 从子步骤名称中提取简短的模块名称（分两行显示）
+/// 例如: "ExecuteGripperMotionAction (0.51s)" -> "夹爪\n0.51s"
 fn extract_short_module_name(full_name: &str) -> String {
     // 提取耗时信息（如果有）
     let (name_part, time_part) = if let Some(paren_pos) = full_name.rfind(" (") {
-        let time = &full_name[paren_pos..];
+        // 提取括号内的时间，去掉括号
+        let time = &full_name[paren_pos + 2..full_name.len() - 1]; // 去掉 " (" 和 ")"
         let name = &full_name[..paren_pos];
         (name, time)
     } else {
@@ -678,7 +679,12 @@ fn extract_short_module_name(full_name: &str) -> String {
         }
     };
 
-    format!("{}{}", short_name, time_part)
+    // 分两行显示：模块名称在上，时间在下
+    if time_part.is_empty() {
+        short_name.to_string()
+    } else {
+        format!("{}\n{}", short_name, time_part)
+    }
 }
 
 /// 绘制时间标注
