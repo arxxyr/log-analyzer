@@ -56,13 +56,15 @@ impl Default for VisualizationConfig {
         track_priority.insert("RoundMarker".to_string(), 0);
         track_priority.insert("Navigation".to_string(), 1);
         track_priority.insert("Arm".to_string(), 2);
-        track_priority.insert("Head".to_string(), 3);
-        track_priority.insert("Waist".to_string(), 4);
+        track_priority.insert("ArmDecision".to_string(), 3);
+        track_priority.insert("Head".to_string(), 4);
+        track_priority.insert("Waist".to_string(), 5);
 
         let mut track_colors = HashMap::new();
         track_colors.insert("RoundMarker".to_string(), "#E8F4F8".to_string());
         track_colors.insert("Navigation".to_string(), "#ADD8E6".to_string());
         track_colors.insert("Arm".to_string(), "#90EE90".to_string());
+        track_colors.insert("ArmDecision".to_string(), "#98FB98".to_string()); // 淡绿色
         track_colors.insert("Head".to_string(), "#FFB366".to_string());
         track_colors.insert("Waist".to_string(), "#DDA0DD".to_string());
 
@@ -145,8 +147,8 @@ impl GanttChartGenerator {
             + (track_count as u32) * (self.config.track_height + self.config.track_spacing);
 
         // 4. 创建绘图区域
-        let root = BitMapBackend::new(output_path, (self.config.width, chart_height))
-            .into_drawing_area();
+        let root =
+            BitMapBackend::new(output_path, (self.config.width, chart_height)).into_drawing_area();
         root.fill(&WHITE)?;
 
         // 5. 获取时间范围
@@ -170,7 +172,10 @@ impl GanttChartGenerator {
             .y_labels(track_count)
             .y_label_formatter(&move |y| {
                 let track_idx = *y as usize;
-                track_labels_for_formatter.get(track_idx).cloned().unwrap_or_default()
+                track_labels_for_formatter
+                    .get(track_idx)
+                    .cloned()
+                    .unwrap_or_default()
             })
             .x_label_formatter(&|x| format!("{:.1}s", x - t_min))
             .draw()?;
@@ -228,44 +233,54 @@ impl GanttChartGenerator {
 
     /// 按泳道分组事件
     fn group_events_by_track(&self, events: &[TimelineEvent]) -> Vec<(Track, Vec<TimelineEvent>)> {
-        // 使用 HashMap 收集事件
-        let mut track_map: HashMap<String, Vec<TimelineEvent>> = HashMap::new();
+        // 使用 Track 的配置键名（英文）收集事件
+        let mut track_map: HashMap<String, (Track, Vec<TimelineEvent>)> = HashMap::new();
 
         for event in events {
-            let track_name = self.track_name_to_string(&event.track);
+            let track_key = self.track_to_config_key(&event.track);
             track_map
-                .entry(track_name)
-                .or_insert_with(Vec::new)
+                .entry(track_key)
+                .or_insert_with(|| (event.track.clone(), Vec::new()))
+                .1
                 .push(event.clone());
         }
 
-        // 按优先级排序泳道
-        let mut sorted_tracks: Vec<(String, i32, Vec<TimelineEvent>)> = track_map
+        // 按优先级排序泳道（使用配置键名查找优先级）
+        let mut sorted_tracks: Vec<(String, i32, Track, Vec<TimelineEvent>)> = track_map
             .into_iter()
-            .map(|(name, events)| {
+            .map(|(key, (track, events))| {
                 let priority = self
                     .config
                     .track_priority
-                    .get(&name)
+                    .get(&key)
                     .copied()
                     .unwrap_or(999);
-                (name, priority, events)
+                (key, priority, track, events)
             })
             .collect();
 
-        sorted_tracks.sort_by_key(|(_, priority, _)| *priority);
+        sorted_tracks.sort_by_key(|(_, priority, _, _)| *priority);
 
-        // 转换回 (Track, Vec<TimelineEvent>)
+        // 返回 (Track, Vec<TimelineEvent>)
         sorted_tracks
             .into_iter()
-            .map(|(name, _, events)| {
-                let track = self.string_to_track(&name);
-                (track, events)
-            })
+            .map(|(_, _, track, events)| (track, events))
             .collect()
     }
 
-    /// Track 转换为字符串
+    /// Track 转换为配置键名（英文，用于查找 track_priority）
+    fn track_to_config_key(&self, track: &Track) -> String {
+        match track {
+            Track::RoundMarker => "RoundMarker".to_string(),
+            Track::Navigation => "Navigation".to_string(),
+            Track::Arm => "Arm".to_string(),
+            Track::Head => "Head".to_string(),
+            Track::Waist => "Waist".to_string(),
+            Track::Custom(name) => name.to_string(),
+        }
+    }
+
+    /// Track 转换为字符串（用于Y轴标签显示）
     fn track_name_to_string(&self, track: &Track) -> String {
         match track {
             Track::RoundMarker => "轮次标记".to_string(),
@@ -273,7 +288,14 @@ impl GanttChartGenerator {
             Track::Arm => "机械臂".to_string(),
             Track::Head => "头部".to_string(),
             Track::Waist => "腰部".to_string(),
-            Track::Custom(name) => name.to_string(),
+            Track::Custom(name) => {
+                // 自定义泳道的中文名称映射
+                match name.as_str() {
+                    "ArmDecision" => "手臂决策".to_string(),
+                    "PrePlanNavigation" => "预打舵".to_string(),
+                    _ => name.to_string(),
+                }
+            }
         }
     }
 
@@ -285,6 +307,8 @@ impl GanttChartGenerator {
             "机械臂" => Track::Arm,
             "头部" => Track::Head,
             "腰部" => Track::Waist,
+            "手臂决策" => Track::Custom("ArmDecision".into()),
+            "预打舵" => Track::Custom("PrePlanNavigation".into()),
             _ => Track::Custom(name.into()),
         }
     }

@@ -1,10 +1,10 @@
 //! 应用状态管理
 
 use chrono::{DateTime, Local};
+use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::sync::Arc;
-use parking_lot::RwLock;
 
 /// 工作流阶段
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -237,12 +237,7 @@ impl AppState {
     /// 获取日志（最新的 N 条）
     pub fn logs(&self, count: usize) -> Vec<LogEntry> {
         let inner = self.inner.read();
-        inner.logs.iter()
-            .rev()
-            .take(count)
-            .rev()
-            .cloned()
-            .collect()
+        inner.logs.iter().rev().take(count).rev().cloned().collect()
     }
 
     /// 获取所有日志
@@ -399,7 +394,8 @@ impl AppState {
     pub fn select_next_plugin(&self) {
         let mut inner = self.inner.write();
         if !inner.available_plugins.is_empty() {
-            inner.selected_plugin_index = (inner.selected_plugin_index + 1) % inner.available_plugins.len();
+            inner.selected_plugin_index =
+                (inner.selected_plugin_index + 1) % inner.available_plugins.len();
         }
     }
 
@@ -418,7 +414,8 @@ impl AppState {
 
     /// 获取已启用的插件名称列表
     pub fn enabled_plugin_names(&self) -> Vec<String> {
-        self.inner.read()
+        self.inner
+            .read()
             .available_plugins
             .iter()
             .filter(|p| p.enabled)

@@ -1,14 +1,14 @@
 //! arm_decision 日志解析模块
 //!
-//! 解析 arm_decision 日志，提取任务执行的时序信息
+//! 解析 arm_decision 日志，提取任务执行的时序信息，用于合并到主甘特图
 
 use anyhow::Result;
 use regex::Regex;
 
-use crate::models::{ArmDecisionModule, ArmDecisionTask, LogLine, Round};
+use crate::models::{ArmDecisionModule, ArmDecisionTask, LogLine};
 
 /// 从 arm_decision 日志文件加载并解析日志行
-pub fn load_arm_decision_log(path: &str) -> Result<Vec<LogLine>> {
+pub fn load_arm_decision_log_lines(path: &str) -> Result<Vec<LogLine>> {
     let content = std::fs::read(path)?;
     let text = String::from_utf8_lossy(&content);
 
@@ -79,7 +79,6 @@ pub fn detect_arm_decision_tasks(lines: &[LogLine]) -> Result<Vec<ArmDecisionTas
                 result_status: None,
                 result_message: None,
                 modules: Vec::new(),
-                round_id: None,
             });
             in_body_task = false;
             continue;
@@ -202,36 +201,4 @@ pub fn detect_arm_decision_tasks(lines: &[LogLine]) -> Result<Vec<ArmDecisionTas
     }
 
     Ok(tasks)
-}
-
-/// 将 arm_decision 任务关联到轮次
-///
-/// 如果任务的时间范围与某个轮次重叠，则将其关联到该轮次
-pub fn associate_tasks_with_rounds(tasks: &mut [ArmDecisionTask], rounds: &[Round]) {
-    for task in tasks.iter_mut() {
-        // 查找任务时间范围与哪个轮次重叠
-        for round in rounds {
-            let round_end = round.end_ts.unwrap_or(f64::MAX);
-
-            // 检查任务是否在轮次时间范围内
-            // 任务开始时间在轮次范围内，或者任务结束时间在轮次范围内
-            let task_end = task.end_ts.unwrap_or(task.start_ts);
-
-            if (task.start_ts >= round.start_ts && task.start_ts <= round_end)
-                || (task_end >= round.start_ts && task_end <= round_end)
-                || (task.start_ts <= round.start_ts && task_end >= round_end)
-            {
-                task.round_id = Some(round.id);
-                break;
-            }
-        }
-    }
-}
-
-/// 获取指定轮次的 arm_decision 任务
-pub fn get_tasks_for_round(tasks: &[ArmDecisionTask], round_id: usize) -> Vec<&ArmDecisionTask> {
-    tasks
-        .iter()
-        .filter(|t| t.round_id == Some(round_id))
-        .collect()
 }

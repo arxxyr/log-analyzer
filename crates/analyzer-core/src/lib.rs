@@ -54,16 +54,12 @@
 //! ```
 
 // 允许 abi_stable 宏生成的代码风格
-#![allow(non_camel_case_types)]  // abi_stable 宏生成的类型使用 snake_case 后缀
-#![allow(non_local_definitions)]  // abi_stable 宏在常量内生成 impl 块
+#![allow(non_camel_case_types)] // abi_stable 宏生成的类型使用 snake_case 后缀
+#![allow(non_local_definitions)] // abi_stable 宏在常量内生成 impl 块
 
 use abi_stable::{
-    declare_root_module_statics,
-    package_version_strings,
-    sabi_trait,
-    sabi_types::VersionStrings,
-    std_types::*,
-    StableAbi,
+    StableAbi, declare_root_module_statics, package_version_strings, sabi_trait,
+    sabi_types::VersionStrings, std_types::*,
 };
 
 // 导出时间线模块
@@ -179,8 +175,7 @@ impl abi_stable::library::RootModule for AnalyzerPluginModule_Ref {
     const NAME: &'static str = "analyzer_plugin";
 
     /// 版本信息
-    const VERSION_STRINGS: abi_stable::sabi_types::VersionStrings =
-        package_version_strings!();
+    const VERSION_STRINGS: abi_stable::sabi_types::VersionStrings = package_version_strings!();
 }
 
 /// 获取核心库版本信息

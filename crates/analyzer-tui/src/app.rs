@@ -7,8 +7,8 @@ use crate::{
 };
 use anyhow::Result;
 use crossterm::event::KeyCode;
-use ratatui::backend::Backend;
 use ratatui::Terminal;
+use ratatui::backend::Backend;
 use std::time::Duration;
 
 /// 应用结果类型

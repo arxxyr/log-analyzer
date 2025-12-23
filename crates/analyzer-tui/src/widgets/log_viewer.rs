@@ -2,11 +2,11 @@
 
 use crate::state::{AppState, LogLevel};
 use ratatui::{
+    Frame,
     layout::{Alignment, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Wrap},
-    Frame,
 };
 
 /// 渲染日志查看器
@@ -46,10 +46,7 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState, scroll_offset: u1
                 format!("[{}] ", time_str),
                 Style::default().fg(Color::DarkGray),
             ),
-            Span::styled(
-                format!("[{}] ", log.level.as_str()),
-                level_style,
-            ),
+            Span::styled(format!("[{}] ", log.level.as_str()), level_style),
             Span::raw(&log.message),
         ]));
     }

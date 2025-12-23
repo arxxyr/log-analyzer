@@ -2,7 +2,7 @@
 //!
 //! 所有分析器插件都输出标准化的时间线数据，方便后续合并和可视化
 
-use abi_stable::{std_types::*, StableAbi};
+use abi_stable::{StableAbi, std_types::*};
 use serde::{Deserialize, Serialize};
 
 /// 泳道类型（用于甘特图分层显示）
@@ -75,7 +75,10 @@ pub struct TimelineEvent {
 impl TimelineEvent {
     /// 计算持续时间（秒）
     pub fn duration(&self) -> Option<f64> {
-        self.end_time.as_ref().map(|end| *end - self.start_time).into()
+        self.end_time
+            .as_ref()
+            .map(|end| *end - self.start_time)
+            .into()
     }
 
     /// 是否已完成

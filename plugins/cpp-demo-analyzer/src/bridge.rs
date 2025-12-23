@@ -26,7 +26,7 @@ mod ffi {
             self: Pin<&mut LogAnalyzer>,
             input_file: &str,
             output_dir: &str,
-        ) -> Result<Box<AnalysisResult>>;  // 使用 Box 而不是 UniquePtr
+        ) -> Result<Box<AnalysisResult>>; // 使用 Box 而不是 UniquePtr
     }
 }
 

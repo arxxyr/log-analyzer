@@ -2,10 +2,10 @@
 
 use crate::state::ProgressInfo;
 use ratatui::{
+    Frame,
     layout::Rect,
     style::{Color, Style},
     widgets::{Block, Gauge},
-    Frame,
 };
 
 /// 渲染进度条
@@ -32,11 +32,7 @@ pub fn render(frame: &mut Frame, area: Rect, progress: &ProgressInfo) {
 
     let gauge = Gauge::default()
         .block(Block::default())
-        .gauge_style(
-            Style::default()
-                .fg(Color::Cyan)
-                .bg(Color::Black),
-        )
+        .gauge_style(Style::default().fg(Color::Cyan).bg(Color::Black))
         .percent(percentage)
         .label(label)
         .use_unicode(true);

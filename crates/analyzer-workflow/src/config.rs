@@ -517,8 +517,9 @@ impl Default for MultiFileConfig {
         track_priority.insert("RoundMarker".to_string(), 0);
         track_priority.insert("Navigation".to_string(), 1);
         track_priority.insert("Arm".to_string(), 2);
-        track_priority.insert("Head".to_string(), 3);
-        track_priority.insert("Waist".to_string(), 4);
+        track_priority.insert("ArmDecision".to_string(), 3);
+        track_priority.insert("Head".to_string(), 4);
+        track_priority.insert("Waist".to_string(), 5);
 
         Self {
             enabled: false,
@@ -583,19 +584,17 @@ impl Default for AnalyzerConfig {
             remote: RemoteConfig::default(),
             local: LocalConfig::default(),
             file_discovery: FileDiscoveryConfig::default(),
-            analyzers: vec![
-                AnalyzerMapping {
-                    name: "master-control".to_string(),
-                    pattern: "master_control_*.log".to_string(),
-                    plugin: "master-control-analyzer".to_string(),
-                    description: "机器人主控系统日志分析器".to_string(),
-                    enabled: true,
-                    required: true,
-                    is_primary: true,
-                    priority: 0,
-                    config: None,
-                },
-            ],
+            analyzers: vec![AnalyzerMapping {
+                name: "master-control".to_string(),
+                pattern: "master_control_*.log".to_string(),
+                plugin: "master-control-analyzer".to_string(),
+                description: "机器人主控系统日志分析器".to_string(),
+                enabled: true,
+                required: true,
+                is_primary: true,
+                priority: 0,
+                config: None,
+            }],
             multi_file: MultiFileConfig::default(),
             workflow: WorkflowConfig::default(),
             logging: LoggingConfig::default(),
@@ -645,19 +644,23 @@ impl AnalyzerConfig {
 
         // 验证分析器映射
         if self.analyzers.is_empty() {
-            return Err(ConfigError::ValidationError("至少需要一个分析器映射".to_string()));
+            return Err(ConfigError::ValidationError(
+                "至少需要一个分析器映射".to_string(),
+            ));
         }
 
         for analyzer in &self.analyzers {
             if analyzer.pattern.is_empty() {
-                return Err(ConfigError::ValidationError(
-                    format!("分析器 '{}' 的模式不能为空", analyzer.name)
-                ));
+                return Err(ConfigError::ValidationError(format!(
+                    "分析器 '{}' 的模式不能为空",
+                    analyzer.name
+                )));
             }
             if analyzer.plugin.is_empty() {
-                return Err(ConfigError::ValidationError(
-                    format!("分析器 '{}' 的插件名称不能为空", analyzer.name)
-                ));
+                return Err(ConfigError::ValidationError(format!(
+                    "分析器 '{}' 的插件名称不能为空",
+                    analyzer.name
+                )));
             }
         }
 

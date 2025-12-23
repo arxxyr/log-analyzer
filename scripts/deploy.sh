@@ -72,6 +72,7 @@ fi
 # 插件列表
 PLUGIN_NAMES=(
     "libmaster_control_analyzer.$PLUGIN_EXT"
+    "libarm_decision_analyzer.$PLUGIN_EXT"
     "libcpp_demo_analyzer.$PLUGIN_EXT"
 )
 

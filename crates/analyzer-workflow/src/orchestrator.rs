@@ -53,6 +53,21 @@ pub enum WorkflowStep {
     Cleanup,
 }
 
+/// 单个文件的分析任务
+#[derive(Debug, Clone)]
+pub struct AnalysisTask {
+    /// 本地文件路径
+    pub local_file: PathBuf,
+    /// 原始文件名
+    pub file_name: String,
+    /// 匹配的模式
+    pub pattern: String,
+    /// 选择的插件名称
+    pub plugin_name: String,
+    /// 是否为主时间轴
+    pub is_primary: bool,
+}
+
 /// 工作流结果
 #[derive(Debug)]
 pub struct WorkflowResult {
@@ -62,6 +77,8 @@ pub struct WorkflowResult {
     pub errors: Vec<String>,
     pub selected_plugin: Option<String>,
     pub analyzed_file: Option<PathBuf>,
+    /// 多文件分析任务列表（v0.4.0 新增）
+    pub analysis_tasks: Vec<AnalysisTask>,
 }
 
 impl WorkflowResult {
@@ -73,6 +90,7 @@ impl WorkflowResult {
             errors: Vec::new(),
             selected_plugin: None,
             analyzed_file: None,
+            analysis_tasks: Vec::new(),
         }
     }
 
@@ -109,7 +127,12 @@ impl WorkflowOrchestrator {
 
     /// 自动模式：获取最新日志并分析
     pub fn run_auto(&mut self) -> Result<WorkflowResult> {
-        info!("启动自动模式");
+        // 检查是否启用了多文件分析
+        if self.config.multi_file.enabled {
+            return self.run_auto_multi();
+        }
+
+        info!("启动自动模式（单文件）");
         let mut result = WorkflowResult::new();
 
         // 1. 连接远程（如果启用）
@@ -140,10 +163,9 @@ impl WorkflowOrchestrator {
             .ok_or(WorkflowError::NoPluginFound)?;
 
         result.selected_plugin = Some(plugin_mapping.plugin.clone());
-        result
-            .add_step(WorkflowStep::SelectPlugin {
-                file_name: file_info.name.clone(),
-            });
+        result.add_step(WorkflowStep::SelectPlugin {
+            file_name: file_info.name.clone(),
+        });
 
         // 5. 分析文件
         info!("准备分析文件: {:?}", local_file);
@@ -152,6 +174,147 @@ impl WorkflowOrchestrator {
         // 注意：实际的插件加载和执行需要在 CLI 层完成
         // 这里只返回需要分析的文件和插件信息
 
+        result.success = true;
+        Ok(result)
+    }
+
+    /// 自动多文件模式：获取多个日志并分析
+    pub fn run_auto_multi(&mut self) -> Result<WorkflowResult> {
+        info!("启动自动模式（多文件）");
+        let mut result = WorkflowResult::new();
+
+        // 1. 连接远程（如果启用）
+        if self.config.remote.enabled {
+            if let Err(e) = self.connect_remote() {
+                let error = format!("远程连接失败: {}", e);
+                warn!("{}", error);
+                result.add_error(error);
+                return Ok(result);
+            }
+            result.add_step(WorkflowStep::ConnectRemote);
+        }
+
+        // 2. 遍历 auto_patterns，为每个模式发现和下载文件
+        let auto_patterns = self.config.multi_file.auto_patterns.clone();
+        info!("需要处理 {} 个文件模式", auto_patterns.len());
+
+        for pattern in &auto_patterns {
+            info!("搜索文件，模式: {}", pattern);
+            result.add_step(WorkflowStep::DiscoverFiles {
+                pattern: pattern.clone(),
+            });
+
+            // 查找对应的分析器配置，提取需要的值（避免借用冲突）
+            let (is_enabled, is_required, is_primary) = {
+                let analyzer_config = self.config.analyzers.iter().find(|a| a.pattern == *pattern);
+                match analyzer_config {
+                    Some(ac) => (ac.enabled, ac.required, ac.is_primary),
+                    None => (true, false, false), // 未配置的模式默认启用、非必需、非主时间轴
+                }
+            };
+
+            // 如果该分析器未启用，跳过
+            if !is_enabled {
+                debug!("跳过未启用的分析器: {}", pattern);
+                continue;
+            }
+
+            // 发现文件
+            let file_info_result = if self.config.remote.enabled && self.remote_connection.is_some()
+            {
+                let connection = self.remote_connection.as_mut().unwrap();
+                self.discoverer.discover_and_select_remote(
+                    connection,
+                    self.config.remote.log_dir.to_str().unwrap(),
+                    pattern,
+                )
+            } else {
+                self.discoverer
+                    .discover_and_select_local(&self.config.local.log_dir, pattern)
+            };
+
+            let file_info = match file_info_result {
+                Ok(f) => f,
+                Err(e) => {
+                    // 非必需文件找不到只是警告
+                    if is_required {
+                        result.add_error(format!("必需文件未找到 ({}): {}", pattern, e));
+                        return Ok(result);
+                    } else {
+                        warn!("可选文件未找到 ({}): {}", pattern, e);
+                        continue;
+                    }
+                }
+            };
+
+            info!("找到文件: {} (模式: {})", file_info.name, pattern);
+
+            // 3. 下载文件（如果是远程）
+            let local_file = if file_info.is_remote {
+                match self.download_file(&file_info, &mut result) {
+                    Ok(f) => f,
+                    Err(e) => {
+                        if is_required {
+                            result.add_error(format!("必需文件下载失败 ({}): {}", pattern, e));
+                            return Ok(result);
+                        } else {
+                            warn!("可选文件下载失败 ({}): {}", pattern, e);
+                            continue;
+                        }
+                    }
+                }
+            } else {
+                file_info.path.clone()
+            };
+
+            // 4. 选择插件
+            let plugin_mapping = match self.selector.select_plugin(&file_info.name) {
+                Some(m) => m,
+                None => {
+                    warn!("未找到匹配插件: {}", file_info.name);
+                    continue;
+                }
+            };
+
+            // 添加分析任务
+            let task = AnalysisTask {
+                local_file: local_file.clone(),
+                file_name: file_info.name.clone(),
+                pattern: pattern.clone(),
+                plugin_name: plugin_mapping.plugin.clone(),
+                is_primary,
+            };
+
+            info!(
+                "添加分析任务: {} -> {} (主时间轴: {})",
+                file_info.name, plugin_mapping.plugin, is_primary
+            );
+            result.analysis_tasks.push(task);
+
+            result.add_step(WorkflowStep::SelectPlugin {
+                file_name: file_info.name.clone(),
+            });
+        }
+
+        // 5. 检查是否有任务
+        if result.analysis_tasks.is_empty() {
+            result.add_error("未找到任何可分析的文件".to_string());
+            return Ok(result);
+        }
+
+        // 设置向后兼容字段（使用第一个主时间轴或第一个任务）
+        if let Some(primary_task) = result.analysis_tasks.iter().find(|t| t.is_primary) {
+            result.analyzed_file = Some(primary_task.local_file.clone());
+            result.selected_plugin = Some(primary_task.plugin_name.clone());
+        } else if let Some(first_task) = result.analysis_tasks.first() {
+            result.analyzed_file = Some(first_task.local_file.clone());
+            result.selected_plugin = Some(first_task.plugin_name.clone());
+        }
+
+        info!(
+            "多文件模式准备完成: {} 个分析任务",
+            result.analysis_tasks.len()
+        );
         result.success = true;
         Ok(result)
     }
@@ -195,9 +358,7 @@ impl WorkflowOrchestrator {
 
             self.download_file(&file_info, &mut result)?
         } else {
-            return Err(WorkflowError::DiscoveryError(
-                DiscovererError::NoFilesFound,
-            ));
+            return Err(WorkflowError::DiscoveryError(DiscovererError::NoFilesFound));
         };
 
         // 选择插件
@@ -318,14 +479,11 @@ impl WorkflowOrchestrator {
         // 优先搜索远程（如果启用）
         if self.config.remote.enabled && self.remote_connection.is_some() {
             let connection = self.remote_connection.as_mut().unwrap();
-            if let Ok(file) = self
-                .discoverer
-                .discover_and_select_remote(
-                    connection,
-                    self.config.remote.log_dir.to_str().unwrap(),
-                    &pattern,
-                )
-            {
+            if let Ok(file) = self.discoverer.discover_and_select_remote(
+                connection,
+                self.config.remote.log_dir.to_str().unwrap(),
+                &pattern,
+            ) {
                 info!("找到远程文件: {:?}", file.path);
                 return Ok(file);
             }
@@ -340,13 +498,15 @@ impl WorkflowOrchestrator {
             return Ok(file);
         }
 
-        Err(WorkflowError::DiscoveryError(
-            DiscovererError::NoFilesFound,
-        ))
+        Err(WorkflowError::DiscoveryError(DiscovererError::NoFilesFound))
     }
 
     /// 下载文件
-    fn download_file(&mut self, file_info: &FileInfo, result: &mut WorkflowResult) -> Result<PathBuf> {
+    fn download_file(
+        &mut self,
+        file_info: &FileInfo,
+        result: &mut WorkflowResult,
+    ) -> Result<PathBuf> {
         if !file_info.is_remote {
             return Ok(file_info.path.clone());
         }

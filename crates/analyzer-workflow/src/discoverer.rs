@@ -94,7 +94,9 @@ impl FileDiscoverer {
         let dir = dir.as_ref();
 
         if !dir.exists() {
-            return Err(DiscovererError::DirectoryNotFound(dir.display().to_string()));
+            return Err(DiscovererError::DirectoryNotFound(
+                dir.display().to_string(),
+            ));
         }
 
         info!("搜索本地文件: {} 模式: {}", dir.display(), pattern);
@@ -198,8 +200,7 @@ impl FileDiscoverer {
         match self.config.auto_select {
             AutoSelect::Latest => {
                 // 如果按 mtime desc 排序，第一个就是最新的
-                if self.config.sort_by == SortBy::Mtime
-                    && self.config.sort_order == SortOrder::Desc
+                if self.config.sort_by == SortBy::Mtime && self.config.sort_order == SortOrder::Desc
                 {
                     Some(files.into_iter().next().unwrap())
                 } else {
@@ -222,8 +223,7 @@ impl FileDiscoverer {
         pattern: &str,
     ) -> Result<FileInfo> {
         let files = self.discover_local(dir, pattern)?;
-        self.auto_select(files)
-            .ok_or(DiscovererError::NoFilesFound)
+        self.auto_select(files).ok_or(DiscovererError::NoFilesFound)
     }
 
     /// 发现并自动选择文件（远程）
@@ -234,8 +234,7 @@ impl FileDiscoverer {
         pattern: &str,
     ) -> Result<FileInfo> {
         let files = self.discover_remote(connection, remote_dir, pattern)?;
-        self.auto_select(files)
-            .ok_or(DiscovererError::NoFilesFound)
+        self.auto_select(files).ok_or(DiscovererError::NoFilesFound)
     }
 }
 

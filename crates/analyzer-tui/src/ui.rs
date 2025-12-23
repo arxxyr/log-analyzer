@@ -3,11 +3,11 @@
 use crate::state::{AppState, FocusArea, WorkflowPhase};
 use crate::widgets::{log_viewer, progress_bar, status_bar};
 use ratatui::{
+    Frame,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, Paragraph},
-    Frame,
 };
 
 /// 渲染主界面
@@ -19,7 +19,7 @@ pub fn render(frame: &mut Frame, state: &AppState, scroll_offset: u16) {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(3), // 标题栏
-            Constraint::Min(0),     // 内容区
+            Constraint::Min(0),    // 内容区
             Constraint::Length(3), // 状态栏
         ])
         .split(size);
@@ -31,8 +31,8 @@ pub fn render(frame: &mut Frame, state: &AppState, scroll_offset: u16) {
     let content_chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
-            Constraint::Min(40),     // 主内容区（最小40列）
-            Constraint::Length(35),  // 插件面板（固定35列）
+            Constraint::Min(40),    // 主内容区（最小40列）
+            Constraint::Length(35), // 插件面板（固定35列）
         ])
         .split(chunks[1]);
 
@@ -109,7 +109,7 @@ fn render_content(frame: &mut Frame, area: Rect, state: &AppState, scroll_offset
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(info_panel_height), // 信息面板（动态高度）
-            Constraint::Min(0),                     // 日志窗口
+            Constraint::Min(0),                    // 日志窗口
         ])
         .split(area);
 
@@ -189,14 +189,26 @@ fn render_info_panel(frame: &mut Frame, area: Rect, state: &AppState) {
     if !plugins.is_empty() {
         lines.push(Line::from("")); // 空行分隔
         lines.push(Line::from(vec![
-            Span::styled("🔧 可用插件 ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-            Span::styled(format!("({})", plugins.len()), Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                "🔧 可用插件 ",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!("({})", plugins.len()),
+                Style::default().fg(Color::DarkGray),
+            ),
         ]));
 
         // 显示前 3 个插件
         for plugin in plugins.iter().take(3) {
             let status_icon = if plugin.enabled { "✓" } else { "✗" };
-            let status_color = if plugin.enabled { Color::Green } else { Color::DarkGray };
+            let status_color = if plugin.enabled {
+                Color::Green
+            } else {
+                Color::DarkGray
+            };
 
             lines.push(Line::from(vec![
                 Span::raw("  "),
@@ -204,7 +216,10 @@ fn render_info_panel(frame: &mut Frame, area: Rect, state: &AppState) {
                 Span::raw(" "),
                 Span::styled(&plugin.name, Style::default().fg(Color::White)),
                 Span::raw(" "),
-                Span::styled(format!("v{}", plugin.version), Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    format!("v{}", plugin.version),
+                    Style::default().fg(Color::DarkGray),
+                ),
             ]));
         }
 
@@ -212,7 +227,10 @@ fn render_info_panel(frame: &mut Frame, area: Rect, state: &AppState) {
         if plugins.len() > 3 {
             lines.push(Line::from(vec![
                 Span::raw("  "),
-                Span::styled(format!("... 还有 {} 个插件", plugins.len() - 3), Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    format!("... 还有 {} 个插件", plugins.len() - 3),
+                    Style::default().fg(Color::DarkGray),
+                ),
             ]));
         }
     }
@@ -247,9 +265,7 @@ fn render_error_popup(frame: &mut Frame, area: Rect, error_msg: &str) {
         Line::from(""),
         Line::from(Span::styled(
             "发生错误:",
-            Style::default()
-                .fg(Color::Red)
-                .add_modifier(Modifier::BOLD),
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
         Line::from(Span::raw(error_msg)),
@@ -291,7 +307,9 @@ fn render_plugin_panel(frame: &mut Frame, area: Rect, state: &AppState) {
 
     // 边框样式根据焦点状态变化
     let border_style = if is_focused {
-        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(Color::DarkGray)
     };
@@ -300,8 +318,8 @@ fn render_plugin_panel(frame: &mut Frame, area: Rect, state: &AppState) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Min(5),     // 插件列表
-            Constraint::Length(6),  // 帮助提示
+            Constraint::Min(5),    // 插件列表
+            Constraint::Length(6), // 帮助提示
         ])
         .split(area);
 
@@ -313,7 +331,7 @@ fn render_plugin_panel(frame: &mut Frame, area: Rect, state: &AppState) {
             let is_selected = i == selected_index && is_focused;
             let checkbox = if plugin.enabled {
                 if plugin.required {
-                    "✓*"  // 必需
+                    "✓*" // 必需
                 } else {
                     "✓"
                 }
@@ -351,13 +369,12 @@ fn render_plugin_panel(frame: &mut Frame, area: Rect, state: &AppState) {
         format!(" 🔧 插件 ({}/{}) ", enabled_count, plugins.len())
     };
 
-    let list = List::new(items)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(border_style)
-                .title(title),
-        );
+    let list = List::new(items).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(border_style)
+            .title(title),
+    );
 
     frame.render_widget(list, chunks[0]);
 
@@ -395,13 +412,12 @@ fn render_plugin_panel(frame: &mut Frame, area: Rect, state: &AppState) {
         ]
     };
 
-    let help = Paragraph::new(help_lines)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::DarkGray))
-                .title(" 快捷键 "),
-        );
+    let help = Paragraph::new(help_lines).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::DarkGray))
+            .title(" 快捷键 "),
+    );
 
     frame.render_widget(help, chunks[1]);
 }

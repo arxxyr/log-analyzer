@@ -79,13 +79,40 @@ impl AnalyzerPlugin for MasterControlAnalyzer {
     }
 }
 
+/// 查找同目录下的 arm_decision 日志文件
+fn find_arm_decision_logs(input_file: &str) -> Vec<String> {
+    use std::path::Path;
+
+    let input_path = Path::new(input_file);
+    let parent_dir = match input_path.parent() {
+        Some(dir) => dir,
+        None => return Vec::new(),
+    };
+
+    let mut arm_decision_files = Vec::new();
+
+    if let Ok(entries) = std::fs::read_dir(parent_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if let Some(filename) = path.file_name().and_then(|n| n.to_str()) {
+                // 匹配 arm_decision*.log 文件
+                if filename.starts_with("arm_decision") && filename.ends_with(".log") {
+                    if let Some(path_str) = path.to_str() {
+                        arm_decision_files.push(path_str.to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    arm_decision_files
+}
+
 /// 内部分析函数（使用原生 Rust 类型）
 ///
 /// 封装了完整的分析流程，从日志解析到结果输出。
 fn run_analysis_internal(input_file: &str, output_dir: &str) -> Result<AnalyzeResult> {
-    use arm_decision_detector::{
-        associate_tasks_with_rounds, detect_arm_decision_tasks, load_arm_decision_log,
-    };
+    use arm_decision_detector::{detect_arm_decision_tasks, load_arm_decision_log_lines};
     use csv_exporter::{
         build_csv_records, export_csv, export_major_flow_stats, generate_action_timeline_csv,
     };
@@ -115,24 +142,17 @@ fn run_analysis_internal(input_file: &str, output_dir: &str) -> Result<AnalyzeRe
     let flows = detect_flows(&lines, &rounds)?;
     let flow_count = flows.len();
 
-    // 5. 查找并解析 arm_decision 日志
-    let mut arm_decision_tasks = Vec::new();
-    let arm_decision_files = find_arm_decision_logs(input_file);
-    for arm_log in &arm_decision_files {
-        match load_arm_decision_log(arm_log) {
-            Ok(arm_lines) => {
-                if let Ok(mut tasks) = detect_arm_decision_tasks(&arm_lines) {
-                    // 关联到轮次
-                    associate_tasks_with_rounds(&mut tasks, &rounds);
-                    arm_decision_tasks.extend(tasks);
-                }
-            }
-            Err(e) => {
-                eprintln!("[arm_decision] 加载日志失败 {}: {}", arm_log, e);
+    // 4.5. 自动查找并加载 arm_decision 日志
+    let arm_decision_logs = find_arm_decision_logs(input_file);
+    let mut all_arm_decision_tasks = Vec::new();
+    for arm_log in &arm_decision_logs {
+        if let Ok(arm_lines) = load_arm_decision_log_lines(arm_log) {
+            if let Ok(tasks) = detect_arm_decision_tasks(&arm_lines) {
+                all_arm_decision_tasks.extend(tasks);
             }
         }
     }
-    let arm_decision_count = arm_decision_tasks.len();
+    let arm_decision_task_count = all_arm_decision_tasks.len();
 
     // 统计各类动作
     let mut nav_count = 0;
@@ -151,14 +171,14 @@ fn run_analysis_internal(input_file: &str, output_dir: &str) -> Result<AnalyzeRe
         }
     }
 
-    // 6. 构建CSV记录
+    // 5. 构建CSV记录
     let records = build_csv_records(&flows, &rounds, &major_flows, t0);
     let record_count = records.len();
 
-    // 7. 创建输出目录
+    // 6. 创建输出目录
     std::fs::create_dir_all(output_dir)?;
 
-    // 8. 导出所有结果
+    // 7. 导出所有结果
     let mut output_files = Vec::new();
 
     // 导出主分析CSV
@@ -178,7 +198,7 @@ fn run_analysis_internal(input_file: &str, output_dir: &str) -> Result<AnalyzeRe
     });
 
     // 生成甘特图（包含 arm_decision 数据）
-    generate_gantt_charts(&flows, &rounds, &arm_decision_tasks, output_dir, t0)?;
+    generate_gantt_charts(&flows, &rounds, &all_arm_decision_tasks, output_dir, t0)?;
     for round in &rounds {
         let width = if rounds.len() >= 100 {
             3
@@ -208,17 +228,26 @@ fn run_analysis_internal(input_file: &str, output_dir: &str) -> Result<AnalyzeRe
         description: "动作时间轴汇总表".into(),
     });
 
-    // 9. 构建标准化时间线数据
+    // 8. 构建标准化时间线数据
     let timeline = build_timeline(input_file, &rounds, &flows, t0, t_last)?;
 
-    // 10. 构建分析摘要
+    // 9. 构建分析摘要
+    let arm_decision_info = if arm_decision_task_count > 0 {
+        format!(
+            "\n         - 检测到 {} 个 arm_decision 任务（来自 {} 个日志文件）",
+            arm_decision_task_count,
+            arm_decision_logs.len()
+        )
+    } else {
+        String::new()
+    };
+
     let summary = format!(
         "分析完成！\n\
          - 检测到 {} 个轮次\n\
          - 检测到 {} 个大流程\n\
          - 检测到 {} 个导航流程\n\
-         - 动作统计: {} 导航, {} 机械臂, {} 头部, {} 腰部\n\
-         - arm_decision 任务: {} 个\n\
+         - 动作统计: {} 导航, {} 手臂, {} 头部, {} 腰部{}\n\
          - 生成 {} 条 CSV 记录\n\
          - 输出目录: {}",
         round_count,
@@ -228,7 +257,7 @@ fn run_analysis_internal(input_file: &str, output_dir: &str) -> Result<AnalyzeRe
         arm_count,
         head_count,
         waist_count,
-        arm_decision_count,
+        arm_decision_info,
         record_count,
         output_dir
     );
@@ -238,34 +267,6 @@ fn run_analysis_internal(input_file: &str, output_dir: &str) -> Result<AnalyzeRe
         output_files: output_files.into(),
         timeline,
     })
-}
-
-/// 查找同目录下的 arm_decision 日志文件
-fn find_arm_decision_logs(master_control_log: &str) -> Vec<String> {
-    use std::path::Path;
-
-    let path = Path::new(master_control_log);
-    let parent = match path.parent() {
-        Some(p) => p,
-        None => return Vec::new(),
-    };
-
-    let mut arm_logs = Vec::new();
-
-    if let Ok(entries) = std::fs::read_dir(parent) {
-        for entry in entries.flatten() {
-            let file_name = entry.file_name();
-            let name = file_name.to_string_lossy();
-            // 匹配 arm_decision*.log 格式
-            if name.starts_with("arm_decision") && name.ends_with(".log") {
-                if let Some(path_str) = entry.path().to_str() {
-                    arm_logs.push(path_str.to_string());
-                }
-            }
-        }
-    }
-
-    arm_logs
 }
 
 /// 构建标准化时间线数据

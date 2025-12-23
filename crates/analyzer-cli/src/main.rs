@@ -5,22 +5,43 @@
 //! - 远程SSH连接和文件下载
 //! - 配置驱动的工作流编排
 //! - 自动插件选择
-//! - TUI 交互式界面（可选）
+//! - TUI 交互式界面（使用 --tui 启用）
 
-use abi_stable::{library::RootModule, std_types::RString};
+use abi_stable::std_types::RString;
+use analyzer_core::timeline::Track;
 use analyzer_core::*;
 use analyzer_merger::{AlignmentStrategy, MergeConfig, TimelineMerger};
 use analyzer_visualizer::{GanttChartGenerator, VisualizationConfig};
-use analyzer_workflow::{AnalyzerConfig, WorkflowOrchestrator};
+use analyzer_workflow::{AnalysisTask, AnalyzerConfig, WorkflowOrchestrator};
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 use tracing::{debug, error, info, warn};
 use tracing_subscriber::EnvFilter;
 
+// ============================================================================
+// 责任链模式：轮次时间段传递
+// ============================================================================
+
+/// 轮次时间范围
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct RoundTimeRange {
+    round_id: usize,
+    start: f64,
+    end: f64,
+}
+
+/// 传递给后续分析器的上下文
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct AnalyzerContext {
+    /// 轮次时间范围列表
+    round_time_ranges: Vec<RoundTimeRange>,
+}
+
 #[cfg(feature = "tui")]
-use analyzer_tui::{run_tui, App, AppState};
+use analyzer_tui::{App, AppState, run_tui};
 
 #[cfg(feature = "tui")]
 use analyzer_remote::TransferProgress;
@@ -57,9 +78,9 @@ struct Cli {
     #[arg(short, long, global = true)]
     verbose: bool,
 
-    /// 禁用 TUI 交互式界面（默认启用）
+    /// 启用 TUI 交互式界面（默认禁用，使用日志输出）
     #[arg(long, global = true)]
-    no_tui: bool,
+    tui: bool,
 }
 
 #[derive(Subcommand, Debug)]
@@ -164,6 +185,8 @@ impl PluginManager {
 
         info!("扫描插件目录: {}", plugin_dir.display());
 
+        // 收集所有插件库路径
+        let mut lib_paths: Vec<PathBuf> = Vec::new();
         for entry in fs::read_dir(plugin_dir)? {
             let entry = entry?;
             let path = entry.path();
@@ -176,18 +199,25 @@ impl PluginManager {
                 #[cfg(target_os = "windows")]
                 let is_lib = ext == "dll";
 
-                if !is_lib {
-                    continue;
+                if is_lib {
+                    lib_paths.push(path);
                 }
+            }
+        }
 
-                match self.load_plugin(&path) {
-                    Ok(plugin_info) => {
-                        info!("  ✓ 加载插件: {}", plugin_info.name);
-                        self.plugins.push(plugin_info);
-                    }
-                    Err(e) => {
-                        warn!("  ✗ 加载失败: {} - {}", path.display(), e);
-                    }
+        // 排序确保加载顺序一致
+        lib_paths.sort();
+
+        // 依次加载每个插件
+        // 注意：abi_stable 有静态变量问题，需要在加载每个库后立即获取 metadata
+        for path in lib_paths {
+            match self.load_plugin(&path) {
+                Ok(plugin_info) => {
+                    info!("  ✓ 加载插件: {}", plugin_info.name);
+                    self.plugins.push(plugin_info);
+                }
+                Err(e) => {
+                    warn!("  ✗ 加载失败: {} - {}", path.display(), e);
                 }
             }
         }
@@ -201,12 +231,27 @@ impl PluginManager {
     }
 
     fn load_plugin(&self, path: &Path) -> Result<PluginInfo> {
-        let module = AnalyzerPluginModule_Ref::load_from_file(path)
-            .map_err(|e| anyhow::anyhow!("无法加载插件 {}: {:?}", path.display(), e))?;
+        use abi_stable::library::lib_header_from_path;
 
-        let plugin = module.create_plugin()();
+        // 使用 abi_stable 的 lib_header_from_path 加载插件
+        // 这会正确处理 LibHeader 结构并获取根模块
+        let lib_header = lib_header_from_path(path).map_err(|e| {
+            anyhow::anyhow!("无法加载插件库 {}: {:?}", path.display(), e)
+        })?;
+
+        // 初始化根模块并检查 ABI 兼容性
+        let module_ref = lib_header
+            .init_root_module::<AnalyzerPluginModule_Ref>()
+            .map_err(|e| {
+                anyhow::anyhow!("初始化插件模块失败 {}: {:?}", path.display(), e)
+            })?;
+
+        // 立即创建插件实例并获取元数据
+        let plugin = module_ref.create_plugin()();
         let metadata = plugin.metadata();
         let name = metadata.name.to_string();
+
+        debug!("插件 {} 元数据: name={}", path.display(), name);
 
         Ok(PluginInfo {
             name,
@@ -243,19 +288,77 @@ impl PluginManager {
 }
 
 // ============================================================================
+// 可视化配置
+// ============================================================================
+
+/// 从配置文件创建可视化配置（动态加载泳道优先级和颜色）
+fn create_visualization_config(config: &AnalyzerConfig) -> VisualizationConfig {
+    let mut vis_config = VisualizationConfig::default();
+
+    // 从配置文件加载 track_priority
+    if !config.multi_file.track_priority.is_empty() {
+        vis_config.track_priority = config.multi_file.track_priority.clone();
+    }
+
+    // 根据配置的 track_priority 动态添加默认颜色
+    // 如果泳道没有配置颜色，使用默认颜色
+    let default_colors = [
+        "#E8F4F8", // 浅蓝灰 - RoundMarker
+        "#ADD8E6", // 浅蓝 - Navigation
+        "#90EE90", // 浅绿 - Arm
+        "#98FB98", // 淡绿 - ArmDecision
+        "#FFB366", // 浅橙 - Head
+        "#DDA0DD", // 浅紫 - Waist
+        "#FFE4B5", // 小麦色
+        "#B0E0E6", // 粉蓝
+        "#F0E68C", // 卡其
+    ];
+
+    for (track_name, _priority) in &config.multi_file.track_priority {
+        if !vis_config.track_colors.contains_key(track_name) {
+            // 根据优先级分配颜色
+            let priority = *_priority as usize;
+            let color = default_colors.get(priority).unwrap_or(&"#CCCCCC");
+            vis_config.track_colors.insert(track_name.clone(), color.to_string());
+        }
+    }
+
+    vis_config
+}
+
+// ============================================================================
 // 执行分析
 // ============================================================================
 
-fn run_analysis(plugin: &PluginInfo, input_file: &Path, output_dir: &Path) -> Result<()> {
-    info!("使用插件: {} v{}", plugin.metadata.name, plugin.metadata.version);
+/// 执行分析（基础版本）
+fn run_analysis(plugin: &PluginInfo, input_file: &Path, output_dir: &Path) -> Result<AnalyzeResult> {
+    run_analysis_with_context(plugin, input_file, output_dir, None)
+}
+
+/// 执行分析（带上下文）
+fn run_analysis_with_context(
+    plugin: &PluginInfo,
+    input_file: &Path,
+    output_dir: &Path,
+    context: Option<&AnalyzerContext>,
+) -> Result<AnalyzeResult> {
+    info!(
+        "使用插件: {} v{}",
+        plugin.metadata.name, plugin.metadata.version
+    );
     info!("分析文件: {}", input_file.display());
     info!("输出目录: {}", output_dir.display());
 
     // 准备分析参数
+    let extra_args = context
+        .map(|ctx| serde_json::to_string(ctx).ok())
+        .flatten()
+        .map(RString::from);
+
     let analyze_args = AnalyzeArgs {
         input_file: RString::from(input_file.to_str().context("无效的路径")?),
         output_dir: RString::from(output_dir.to_str().context("无效的路径")?),
-        extra_args: None.into(),
+        extra_args: extra_args.into(),
     };
 
     // 执行分析
@@ -269,10 +372,149 @@ fn run_analysis(plugin: &PluginInfo, input_file: &Path, output_dir: &Path) -> Re
     println!("\n{}", result.summary);
     println!("\n生成的文件:");
     for file in result.output_files.iter() {
-        println!("  - {} ({}): {}", file.path, file.file_type, file.description);
+        println!(
+            "  - {} ({}): {}",
+            file.path, file.file_type, file.description
+        );
     }
 
     println!("\n分析完成！");
+    Ok(result)
+}
+
+/// 从 Timeline 提取轮次时间范围
+fn extract_round_time_ranges(timeline: &timeline::Timeline) -> Vec<RoundTimeRange> {
+    use abi_stable::std_types::ROption;
+
+    let mut ranges = Vec::new();
+    let mut round_id = 0;
+
+    for event in timeline.events.iter() {
+        if event.track == Track::RoundMarker {
+            if let ROption::RSome(end) = &event.end_time {
+                round_id += 1;
+                ranges.push(RoundTimeRange {
+                    round_id,
+                    start: event.start_time,
+                    end: *end,
+                });
+            }
+        }
+    }
+
+    ranges
+}
+
+/// 运行多文件分析（责任链模式）
+fn run_multi_file_analysis(
+    tasks: &[AnalysisTask],
+    plugin_manager: &PluginManager,
+    config: &AnalyzerConfig,
+) -> Result<Vec<AnalyzeResult>> {
+    let mut results = Vec::new();
+    let mut context: Option<AnalyzerContext> = None;
+
+    // 按主时间轴优先排序：先分析 is_primary=true 的任务
+    let mut sorted_tasks: Vec<_> = tasks.to_vec();
+    sorted_tasks.sort_by(|a, b| b.is_primary.cmp(&a.is_primary));
+
+    for task in &sorted_tasks {
+        info!(
+            "分析文件: {} (插件: {}, 主时间轴: {})",
+            task.file_name, task.plugin_name, task.is_primary
+        );
+
+        let plugin = plugin_manager
+            .find_by_name(&task.plugin_name)
+            .with_context(|| format!("未找到插件: {}", task.plugin_name))?;
+
+        // 执行分析（主时间轴不需要上下文，后续分析器需要）
+        let result = if task.is_primary {
+            run_analysis(plugin, &task.local_file, &config.local.output_dir)?
+        } else {
+            run_analysis_with_context(
+                plugin,
+                &task.local_file,
+                &config.local.output_dir,
+                context.as_ref(),
+            )?
+        };
+
+        // 如果是主时间轴，提取轮次时间范围作为上下文
+        if task.is_primary {
+            let ranges = extract_round_time_ranges(&result.timeline);
+            info!("提取到 {} 个轮次时间范围", ranges.len());
+            context = Some(AnalyzerContext {
+                round_time_ranges: ranges,
+            });
+        }
+
+        results.push(result);
+    }
+
+    Ok(results)
+}
+
+/// 合并多个 Timeline 并生成统一甘特图
+fn merge_and_visualize(
+    results: &[AnalyzeResult],
+    config: &AnalyzerConfig,
+    output_prefix: &str,
+) -> Result<()> {
+    if results.len() <= 1 {
+        info!("只有一个分析结果，无需合并");
+        return Ok(());
+    }
+
+    info!("合并 {} 个时间线...", results.len());
+
+    // 提取所有时间线
+    let timelines: Vec<_> = results.iter().map(|r| r.timeline.clone()).collect();
+
+    // 创建合并配置
+    let merge_config = MergeConfig {
+        primary_source: config.multi_file.alignment.primary_source.clone(),
+        time_tolerance: config.multi_file.alignment.time_tolerance,
+        alignment_strategy: match config.multi_file.alignment.strategy {
+            analyzer_workflow::config::AlignmentStrategy::Timestamp => {
+                AlignmentStrategy::Timestamp
+            }
+            analyzer_workflow::config::AlignmentStrategy::EventBased => {
+                AlignmentStrategy::EventBased
+            }
+        },
+        track_priority: config.multi_file.track_priority.clone(),
+    };
+
+    // 合并时间线
+    let merger = TimelineMerger::new(merge_config);
+    let merged = merger.merge(timelines)?;
+
+    info!("合并完成: {} 个事件", merged.events.len());
+
+    // 生成统一甘特图
+    let output_path = config
+        .local
+        .output_dir
+        .join(format!("{}_merged_gantt.png", output_prefix));
+
+    info!("生成统一甘特图: {}", output_path.display());
+
+    // 从配置文件动态创建可视化配置
+    let vis_config = create_visualization_config(&config);
+    let generator = GanttChartGenerator::new(vis_config);
+
+    generator.generate_gantt_chart(
+        &merged,
+        output_path.to_str().context("无效的路径")?,
+        "多源合并甘特图",
+    )?;
+
+    println!("\n✓ 多文件分析完成！");
+    println!("  - 分析文件数: {}", results.len());
+    println!("  - 合并事件数: {}", merged.events.len());
+    println!("  - 统一甘特图: {}", output_path.display());
+
     Ok(())
 }
 
@@ -321,14 +563,18 @@ impl TransferProgress for TuiProgressCallback {
             );
 
             // 更新进度条
-            self.state.set_progress(Some(
-                analyzer_tui::state::ProgressInfo::new(bytes_transferred, total_bytes),
-            ));
+            self.state
+                .set_progress(Some(analyzer_tui::state::ProgressInfo::new(
+                    bytes_transferred,
+                    total_bytes,
+                )));
         } else {
             // 静默更新进度条
-            self.state.set_progress(Some(
-                analyzer_tui::state::ProgressInfo::new(bytes_transferred, total_bytes),
-            ));
+            self.state
+                .set_progress(Some(analyzer_tui::state::ProgressInfo::new(
+                    bytes_transferred,
+                    total_bytes,
+                )));
         }
     }
 
@@ -426,10 +672,16 @@ async fn run_workflow_once(state_clone: &AppState, config_clone: &AnalyzerConfig
 
     // 获取用户选择的插件列表
     let enabled_plugin_names = state_clone.enabled_plugin_names();
-    state_clone.add_log(LogLevel::Info, format!("已启用 {} 个插件", enabled_plugin_names.len()));
+    state_clone.add_log(
+        LogLevel::Info,
+        format!("已启用 {} 个插件", enabled_plugin_names.len()),
+    );
 
     // 加载用户选择的插件
-    state_clone.add_log(LogLevel::Info, format!("加载插件目录: {}", config_clone.local.plugin_dir.display()));
+    state_clone.add_log(
+        LogLevel::Info,
+        format!("加载插件目录: {}", config_clone.local.plugin_dir.display()),
+    );
     let mut plugin_manager = PluginManager::new();
     if let Err(e) = plugin_manager.load_plugins(&config_clone.local.plugin_dir) {
         state_clone.add_log(LogLevel::Error, format!("加载插件失败: {}", e));
@@ -438,15 +690,20 @@ async fn run_workflow_once(state_clone: &AppState, config_clone: &AnalyzerConfig
     }
 
     // 过滤只保留用户选择的插件
-    plugin_manager.plugins.retain(|p| enabled_plugin_names.contains(&p.name));
+    plugin_manager
+        .plugins
+        .retain(|p| enabled_plugin_names.contains(&p.name));
 
-    state_clone.add_log(LogLevel::Info, format!("成功加载 {} 个插件", plugin_manager.plugins.len()));
+    state_clone.add_log(
+        LogLevel::Info,
+        format!("成功加载 {} 个插件", plugin_manager.plugins.len()),
+    );
 
     // 在日志中列出插件
     for plugin in &plugin_manager.plugins {
         state_clone.add_log(
             LogLevel::Info,
-            format!("  ✓ {} v{}", plugin.metadata.name, plugin.metadata.version)
+            format!("  ✓ {} v{}", plugin.metadata.name, plugin.metadata.version),
         );
     }
 
@@ -539,7 +796,9 @@ async fn run_workflow_once(state_clone: &AppState, config_clone: &AnalyzerConfig
     let mut transfer = FileTransfer::new(connection);
     let progress_callback = TuiProgressCallback::new(state_clone.clone(), file_info.name.clone());
 
-    if let Err(e) = transfer.download_with_callback(&file_info.path, &local_path, Some(progress_callback)) {
+    if let Err(e) =
+        transfer.download_with_callback(&file_info.path, &local_path, Some(progress_callback))
+    {
         state_clone.add_log(LogLevel::Error, format!("下载失败: {}", e));
         state_clone.set_phase(WorkflowPhase::Error);
         return;
@@ -570,13 +829,20 @@ async fn run_workflow_once(state_clone: &AppState, config_clone: &AnalyzerConfig
     state_clone.set_phase(WorkflowPhase::Analyzing);
     state_clone.add_log(
         LogLevel::Info,
-        format!("开始分析: {}", file_to_analyze.file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("未知文件"))
+        format!(
+            "开始分析: {}",
+            file_to_analyze
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("未知文件")
+        ),
     );
     state_clone.add_log(
         LogLevel::Info,
-        format!("使用插件: {} v{}", plugin.metadata.name, plugin.metadata.version)
+        format!(
+            "使用插件: {} v{}",
+            plugin.metadata.name, plugin.metadata.version
+        ),
     );
 
     // 执行分析
@@ -612,16 +878,20 @@ async fn run_workflow_once(state_clone: &AppState, config_clone: &AnalyzerConfig
     };
 
     // 统计生成的文件
-    let gantt_count = analysis_result.output_files.iter()
+    let gantt_count = analysis_result
+        .output_files
+        .iter()
         .filter(|f| f.file_type == "png" && f.path.contains("gantt"))
         .count();
-    let csv_count = analysis_result.output_files.iter()
+    let csv_count = analysis_result
+        .output_files
+        .iter()
         .filter(|f| f.file_type == "csv")
         .count();
 
     state_clone.add_log(
         LogLevel::Info,
-        format!("生成 {} 个甘特图, {} 个CSV文件", gantt_count, csv_count)
+        format!("生成 {} 个甘特图, {} 个CSV文件", gantt_count, csv_count),
     );
 
     // 显示分析结果
@@ -631,12 +901,18 @@ async fn run_workflow_once(state_clone: &AppState, config_clone: &AnalyzerConfig
     for file in analysis_result.output_files.iter() {
         state_clone.add_log(
             LogLevel::Info,
-            format!("  - {} ({}): {}", file.path, file.file_type, file.description)
+            format!(
+                "  - {} ({}): {}",
+                file.path, file.file_type, file.description
+            ),
         );
     }
 
     // 解析并显示 major_flow_time_summary.txt（如果存在）
-    let summary_path = config_clone.local.output_dir.join("major_flow_time_summary.txt");
+    let summary_path = config_clone
+        .local
+        .output_dir
+        .join("major_flow_time_summary.txt");
     if summary_path.exists() {
         match std::fs::read_to_string(&summary_path) {
             Ok(content) => {
@@ -701,22 +977,23 @@ async fn run_workflow_once(state_clone: &AppState, config_clone: &AnalyzerConfig
                 if complete_count > 0 {
                     state_clone.add_log(
                         LogLevel::Info,
-                        format!("✅ 完整大流程: {} 个 (共 {:.1} 分钟)",
-                            complete_count, complete_time / 60.0)
+                        format!(
+                            "✅ 完整大流程: {} 个 (共 {:.1} 分钟)",
+                            complete_count,
+                            complete_time / 60.0
+                        ),
                     );
                     // 只显示前5个
                     for (name, time, rounds) in complete_flows.iter().take(5) {
                         state_clone.add_log(
                             LogLevel::Info,
-                            format!("   {} {:.1}分 {}轮",
-                                name, time / 60.0, rounds)
+                            format!("   {} {:.1}分 {}轮", name, time / 60.0, rounds),
                         );
                     }
                     if complete_flows.len() > 5 {
                         state_clone.add_log(
                             LogLevel::Info,
-                            format!("   ... 还有 {} 个完整流程",
-                                complete_flows.len() - 5)
+                            format!("   ... 还有 {} 个完整流程", complete_flows.len() - 5),
                         );
                     }
                 }
@@ -726,22 +1003,19 @@ async fn run_workflow_once(state_clone: &AppState, config_clone: &AnalyzerConfig
                     state_clone.add_log(LogLevel::Info, "");
                     state_clone.add_log(
                         LogLevel::Info,
-                        format!("⚠️  不完整大流程: {} 个",
-                            incomplete_count)
+                        format!("⚠️  不完整大流程: {} 个", incomplete_count),
                     );
                     // 只显示前3个
                     for (name, time, rounds) in incomplete_flows.iter().take(3) {
                         state_clone.add_log(
                             LogLevel::Info,
-                            format!("   {} {:.1}分 {}轮",
-                                name, time / 60.0, rounds)
+                            format!("   {} {:.1}分 {}轮", name, time / 60.0, rounds),
                         );
                     }
                     if incomplete_flows.len() > 3 {
                         state_clone.add_log(
                             LogLevel::Info,
-                            format!("   ... 还有 {} 个不完整流程",
-                                incomplete_flows.len() - 3)
+                            format!("   ... 还有 {} 个不完整流程", incomplete_flows.len() - 3),
                         );
                     }
                 }
@@ -749,16 +1023,16 @@ async fn run_workflow_once(state_clone: &AppState, config_clone: &AnalyzerConfig
                 state_clone.add_log(LogLevel::Info, "");
                 state_clone.add_log(
                     LogLevel::Info,
-                    format!("⏱️  总用时: {:.1}分 ({:.2}小时)",
-                        total_time / 60.0, total_time / 3600.0)
+                    format!(
+                        "⏱️  总用时: {:.1}分 ({:.2}小时)",
+                        total_time / 60.0,
+                        total_time / 3600.0
+                    ),
                 );
                 state_clone.add_log(LogLevel::Info, "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
             }
             Err(e) => {
-                state_clone.add_log(
-                    LogLevel::Warn,
-                    format!("无法读取摘要文件: {}", e)
-                );
+                state_clone.add_log(LogLevel::Warn, format!("无法读取摘要文件: {}", e));
             }
         }
     }
@@ -781,9 +1055,9 @@ fn run_with_tui(_config: &AnalyzerConfig) -> Result<()> {
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    // 如果没有子命令且未禁用 TUI，启动 TUI 界面
+    // 如果指定了 --tui 参数，启动 TUI 界面
     #[cfg(feature = "tui")]
-    if cli.command.is_none() && !cli.no_tui {
+    if cli.tui {
         // 加载配置
         let config = if cli.config.exists() {
             AnalyzerConfig::load_from_file(&cli.config)?
@@ -795,16 +1069,11 @@ fn main() -> Result<()> {
     }
 
     // 初始化日志
-    let log_level = if cli.verbose {
-        "debug"
-    } else {
-        &cli.log_level
-    };
+    let log_level = if cli.verbose { "debug" } else { &cli.log_level };
 
     tracing_subscriber::fmt()
         .with_env_filter(
-            EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new(log_level)),
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(log_level)),
         )
         .with_target(false)
         .with_level(true)
@@ -844,9 +1113,19 @@ fn main() -> Result<()> {
         Some(Commands::CheckConfig) => {
             println!("✓ 配置文件验证成功");
             println!("\n配置摘要:");
-            println!("  远程连接: {}", if config.remote.enabled { "启用" } else { "禁用" });
+            println!(
+                "  远程连接: {}",
+                if config.remote.enabled {
+                    "启用"
+                } else {
+                    "禁用"
+                }
+            );
             if config.remote.enabled {
-                println!("  远程主机: {}@{}:{}", config.remote.user, config.remote.host, config.remote.port);
+                println!(
+                    "  远程主机: {}@{}:{}",
+                    config.remote.user, config.remote.host, config.remote.port
+                );
             }
             println!("  本地日志目录: {}", config.local.log_dir.display());
             println!("  输出目录: {}", config.local.output_dir.display());
@@ -861,7 +1140,10 @@ fn main() -> Result<()> {
 
             println!("\n远程可用文件:\n");
             for file in files {
-                println!("  {} ({} bytes, mtime: {})", file.name, file.size, file.mtime);
+                println!(
+                    "  {} ({} bytes, mtime: {})",
+                    file.name, file.size, file.mtime
+                );
             }
             return Ok(());
         }
@@ -918,17 +1200,29 @@ fn main() -> Result<()> {
                 anyhow::bail!("工作流失败");
             }
 
-            // 获取分析文件和插件
-            let file_to_analyze = result.analyzed_file.context("未找到要分析的文件")?;
-            let plugin_name = result.selected_plugin.context("未选择插件")?;
+            // 检查是否为多文件模式
+            if !result.analysis_tasks.is_empty() {
+                info!("多文件模式: {} 个分析任务", result.analysis_tasks.len());
 
-            // 查找插件
-            let plugin = plugin_manager
-                .find_by_name(&plugin_name)
-                .with_context(|| format!("未找到插件: {}", plugin_name))?;
+                // 使用责任链模式执行多文件分析
+                let analysis_results =
+                    run_multi_file_analysis(&result.analysis_tasks, &plugin_manager, &config)?;
 
-            // 执行分析
-            run_analysis(plugin, &file_to_analyze, &config.local.output_dir)?;
+                // 如果有多个结果，合并并生成统一甘特图
+                if analysis_results.len() > 1 {
+                    merge_and_visualize(&analysis_results, &config, "auto")?;
+                }
+            } else {
+                // 单文件模式（向后兼容）
+                let file_to_analyze = result.analyzed_file.context("未找到要分析的文件")?;
+                let plugin_name = result.selected_plugin.context("未选择插件")?;
+
+                let plugin = plugin_manager
+                    .find_by_name(&plugin_name)
+                    .with_context(|| format!("未找到插件: {}", plugin_name))?;
+
+                run_analysis(plugin, &file_to_analyze, &config.local.output_dir)?;
+            }
         }
 
         Some(Commands::Analyze {
@@ -962,7 +1256,8 @@ fn main() -> Result<()> {
             } else {
                 // 通过 workflow selector 自动选择
                 let orchestrator = WorkflowOrchestrator::new(config.clone())?;
-                let file_name = input_file.file_name()
+                let file_name = input_file
+                    .file_name()
                     .and_then(|n| n.to_str())
                     .context("无效的文件名")?;
 
@@ -1041,11 +1336,34 @@ fn main() -> Result<()> {
 
             info!("共找到 {} 个文件需要分析", files_to_analyze.len());
 
-            // 2. 分析每个文件并收集时间线
-            let mut timelines = Vec::new();
+            // 2. 按主时间轴优先排序（责任链模式）
+            // 先找出哪些文件对应主时间轴
+            let mut files_with_priority: Vec<(PathBuf, String, bool)> = files_to_analyze
+                .into_iter()
+                .map(|(path, pattern)| {
+                    let is_primary = config
+                        .analyzers
+                        .iter()
+                        .find(|a| a.pattern == pattern)
+                        .map(|a| a.is_primary)
+                        .unwrap_or(false);
+                    (path, pattern, is_primary)
+                })
+                .collect();
 
-            for (file_path, pattern) in &files_to_analyze {
-                info!("分析文件: {}", file_path.display());
+            // 主时间轴优先
+            files_with_priority.sort_by(|a, b| b.2.cmp(&a.2));
+
+            // 3. 分析每个文件并收集时间线（责任链模式）
+            let mut timelines = Vec::new();
+            let mut context: Option<AnalyzerContext> = None;
+
+            for (file_path, pattern, is_primary) in &files_with_priority {
+                info!(
+                    "分析文件: {} (主时间轴: {})",
+                    file_path.display(),
+                    is_primary
+                );
 
                 // 根据 pattern 找到对应的 analyzer 配置
                 let analyzer_mapping = config
@@ -1059,11 +1377,22 @@ fn main() -> Result<()> {
                     .find_by_name(&analyzer_mapping.plugin)
                     .with_context(|| format!("未找到插件: {}", analyzer_mapping.plugin))?;
 
-                // 准备分析参数
+                // 准备分析参数（非主时间轴传递上下文）
+                let extra_args = if *is_primary {
+                    None
+                } else {
+                    context
+                        .as_ref()
+                        .and_then(|ctx| serde_json::to_string(ctx).ok())
+                        .map(RString::from)
+                };
+
                 let analyze_args = AnalyzeArgs {
                     input_file: RString::from(file_path.to_str().context("无效的路径")?),
-                    output_dir: RString::from(config.local.output_dir.to_str().context("无效的路径")?),
-                    extra_args: None.into(),
+                    output_dir: RString::from(
+                        config.local.output_dir.to_str().context("无效的路径")?,
+                    ),
+                    extra_args: extra_args.into(),
                 };
 
                 // 执行分析
@@ -1072,6 +1401,15 @@ fn main() -> Result<()> {
                     .analyze(analyze_args)
                     .into_result()
                     .with_context(|| format!("分析文件失败: {}", file_path.display()))?;
+
+                // 如果是主时间轴，提取轮次时间范围作为上下文
+                if *is_primary {
+                    let ranges = extract_round_time_ranges(&result.timeline);
+                    info!("提取到 {} 个轮次时间范围", ranges.len());
+                    context = Some(AnalyzerContext {
+                        round_time_ranges: ranges,
+                    });
+                }
 
                 // 收集时间线
                 timelines.push(result.timeline);
@@ -1086,8 +1424,12 @@ fn main() -> Result<()> {
                 primary_source: config.multi_file.alignment.primary_source.clone(),
                 time_tolerance: config.multi_file.alignment.time_tolerance,
                 alignment_strategy: match config.multi_file.alignment.strategy {
-                    analyzer_workflow::config::AlignmentStrategy::Timestamp => AlignmentStrategy::Timestamp,
-                    analyzer_workflow::config::AlignmentStrategy::EventBased => AlignmentStrategy::EventBased,
+                    analyzer_workflow::config::AlignmentStrategy::Timestamp => {
+                        AlignmentStrategy::Timestamp
+                    }
+                    analyzer_workflow::config::AlignmentStrategy::EventBased => {
+                        AlignmentStrategy::EventBased
+                    }
                 },
                 track_priority: config.multi_file.track_priority.clone(),
             };
@@ -1105,7 +1447,8 @@ fn main() -> Result<()> {
 
             info!("生成甘特图: {}", output_path.display());
 
-            let vis_config = VisualizationConfig::default();
+            // 从配置文件动态创建可视化配置
+            let vis_config = create_visualization_config(&config);
             let generator = GanttChartGenerator::new(vis_config);
 
             generator.generate_gantt_chart(
@@ -1115,7 +1458,7 @@ fn main() -> Result<()> {
             )?;
 
             println!("\n✓ 多文件分析完成！");
-            println!("  - 分析文件数: {}", files_to_analyze.len());
+            println!("  - 分析文件数: {}", files_with_priority.len());
             println!("  - 合并事件数: {}", merged.events.len());
             println!("  - 甘特图: {}", output_path.display());
         }
@@ -1151,17 +1494,29 @@ fn main() -> Result<()> {
                 anyhow::bail!("工作流失败");
             }
 
-            // 获取分析文件和插件
-            let file_to_analyze = result.analyzed_file.context("未找到要分析的文件")?;
-            let plugin_name = result.selected_plugin.context("未选择插件")?;
+            // 检查是否为多文件模式
+            if !result.analysis_tasks.is_empty() {
+                info!("多文件模式: {} 个分析任务", result.analysis_tasks.len());
 
-            // 查找插件
-            let plugin = plugin_manager
-                .find_by_name(&plugin_name)
-                .with_context(|| format!("未找到插件: {}", plugin_name))?;
+                // 使用责任链模式执行多文件分析
+                let analysis_results =
+                    run_multi_file_analysis(&result.analysis_tasks, &plugin_manager, &config)?;
 
-            // 执行分析
-            run_analysis(plugin, &file_to_analyze, &config.local.output_dir)?;
+                // 如果有多个结果，合并并生成统一甘特图
+                if analysis_results.len() > 1 {
+                    merge_and_visualize(&analysis_results, &config, "auto")?;
+                }
+            } else {
+                // 单文件模式（向后兼容）
+                let file_to_analyze = result.analyzed_file.context("未找到要分析的文件")?;
+                let plugin_name = result.selected_plugin.context("未选择插件")?;
+
+                let plugin = plugin_manager
+                    .find_by_name(&plugin_name)
+                    .with_context(|| format!("未找到插件: {}", plugin_name))?;
+
+                run_analysis(plugin, &file_to_analyze, &config.local.output_dir)?;
+            }
         }
     }
 

@@ -36,15 +36,15 @@ impl AnalyzerPlugin for CppDemoAnalyzer {
             Err(e) => {
                 #[derive(Debug)]
                 struct CppAnalysisError(String);
-                
+
                 impl std::fmt::Display for CppAnalysisError {
                     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
                         write!(f, "C++ 分析失败: {}", self.0)
                     }
                 }
-                
+
                 impl std::error::Error for CppAnalysisError {}
-                
+
                 let err = CppAnalysisError(format!("{:?}", e));
                 RErr(RBoxError::new(err))
             }
@@ -55,22 +55,20 @@ impl AnalyzerPlugin for CppDemoAnalyzer {
 /// 调用 C++ 分析逻辑
 fn run_cpp_analysis(input_file: &str, output_dir: &str) -> anyhow::Result<AnalyzeResult> {
     println!("[Rust] 创建 C++ 分析器实例");
-    
+
     // 创建 C++ 分析器（通过 cxx 桥接）
     let mut analyzer = new_log_analyzer();
-    
+
     // 创建输出目录
     std::fs::create_dir_all(output_dir)?;
-    
+
     println!("[Rust] 调用 C++ analyze 方法");
-    
+
     // 调用 C++ 的 analyze 方法
-    let cpp_result = analyzer
-        .pin_mut()
-        .analyze(input_file, output_dir)?;
-    
+    let cpp_result = analyzer.pin_mut().analyze(input_file, output_dir)?;
+
     println!("[Rust] C++ 分析完成，转换结果");
-    
+
     // 转换 C++ 结果为 Rust 插件结果
     let output_files: Vec<OutputFile> = cpp_result
         .output_files
@@ -81,7 +79,7 @@ fn run_cpp_analysis(input_file: &str, output_dir: &str) -> anyhow::Result<Analyz
             description: "C++ 生成的分析报告".into(),
         })
         .collect();
-    
+
     // 创建一个空的时间线（demo 插件不生成真实事件）
     let timeline = timeline::Timeline {
         name: "cpp_demo".into(),

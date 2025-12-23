@@ -4,8 +4,8 @@
 # 远程连接配置
 remote:
   enabled: true
-  host: "192.168.5.103"
-  port: 23
+  host: "192.168.5.101"
+  port: 22
   user: "linux"
   # 认证方式（优先级从高到低）
   auth:
@@ -57,12 +57,12 @@ analyzers:
       detect_rounds: true
       generate_gantt: true
 
-  # 外部机械臂日志（可选）
-  - name: "external-arm"
-    pattern: "arm_*.log"
-    plugin: "arm-analyzer"
-    description: "外部机械臂日志分析器"
-    enabled: false
+  # 机械臂决策日志（可选）
+  - name: "arm-decision"
+    pattern: "arm_decision*.log"
+    plugin: "arm-decision-analyzer"
+    description: "机械臂决策系统日志分析器"
+    enabled: true
     required: false
 
   # 外部导航日志（可选）
@@ -98,7 +98,7 @@ multi_file:
   # 自动模式下同时下载的文件模式（按优先级）
   auto_patterns:
     - "master_control_*.log"  # 必需
-    - "arm_*.log"             # 可选
+    - "arm_decision*.log"     # 可选
     - "nav_*.log"             # 可选
 
   # 时间对齐配置
@@ -117,8 +117,9 @@ multi_file:
     RoundMarker: 0
     Navigation: 1
     Arm: 2
-    Head: 3
-    Waist: 4
+    ArmDecision: 3
+    Head: 4
+    Waist: 5
 
 # 工作流配置
 workflow:

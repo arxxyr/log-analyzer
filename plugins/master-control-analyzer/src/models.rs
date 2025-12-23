@@ -100,6 +100,10 @@ pub struct MajorFlow {
     pub failure_point: Option<String>,
 }
 
+// ============================================================================
+// arm_decision 相关结构（用于合并到主甘特图）
+// ============================================================================
+
 /// arm_decision 任务中的子模块
 #[derive(Debug, Clone)]
 pub struct ArmDecisionModule {
@@ -136,9 +140,11 @@ pub struct ArmDecisionTask {
     pub result_message: Option<String>,
     /// 子模块列表
     pub modules: Vec<ArmDecisionModule>,
-    /// 关联的轮次 ID（如果在某个轮次时间范围内）
-    pub round_id: Option<usize>,
 }
+
+// ============================================================================
+// CSV 导出结构
+// ============================================================================
 
 /// CSV记录结构
 #[derive(Debug, Serialize)]

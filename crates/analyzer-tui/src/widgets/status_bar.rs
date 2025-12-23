@@ -2,23 +2,21 @@
 
 use crate::state::AppState;
 use ratatui::{
+    Frame,
     layout::{Alignment, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph},
-    Frame,
 };
 
 /// 渲染状态栏
 pub fn render(frame: &mut Frame, area: Rect, _state: &AppState) {
-    let mut spans = vec![
-        Span::styled(
-            " 快捷键: ",
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        ),
-    ];
+    let mut spans = vec![Span::styled(
+        " 快捷键: ",
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
+    )];
 
     // 快捷键提示
     let shortcuts = vec![

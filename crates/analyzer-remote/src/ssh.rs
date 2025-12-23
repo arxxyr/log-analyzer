@@ -37,7 +37,10 @@ pub type Result<T> = std::result::Result<T, SshError>;
 pub enum AuthMethod {
     /// SSH 密钥文件
     #[serde(rename = "key_file")]
-    KeyFile { path: PathBuf, passphrase: Option<String> },
+    KeyFile {
+        path: PathBuf,
+        passphrase: Option<String>,
+    },
 
     /// SSH Agent
     #[serde(rename = "agent")]
@@ -139,7 +142,8 @@ impl SshConnection {
             .map_err(|e| SshError::ConnectionFailed(format!("创建 session 失败: {}", e)))?;
 
         session.set_tcp_stream(tcp);
-        session.handshake()
+        session
+            .handshake()
             .map_err(|e| SshError::ConnectionFailed(format!("SSH 握手失败: {}", e)))?;
 
         debug!("SSH 握手成功");
@@ -160,26 +164,25 @@ impl SshConnection {
             AuthMethod::KeyFile { path, passphrase } => {
                 debug!("使用密钥文件认证: {:?}", path);
                 self.session
-                    .userauth_pubkey_file(
-                        &self.config.user,
-                        None,
-                        path,
-                        passphrase.as_deref(),
-                    )
+                    .userauth_pubkey_file(&self.config.user, None, path, passphrase.as_deref())
                     .map_err(|e| SshError::AuthenticationFailed(format!("密钥认证失败: {}", e)))?;
             }
             AuthMethod::Agent => {
                 debug!("使用 SSH Agent 认证");
-                let mut agent = self.session.agent()
-                    .map_err(|e| SshError::AuthenticationFailed(format!("无法连接 SSH Agent: {}", e)))?;
+                let mut agent = self.session.agent().map_err(|e| {
+                    SshError::AuthenticationFailed(format!("无法连接 SSH Agent: {}", e))
+                })?;
 
-                agent.connect()
-                    .map_err(|e| SshError::AuthenticationFailed(format!("连接 SSH Agent 失败: {}", e)))?;
+                agent.connect().map_err(|e| {
+                    SshError::AuthenticationFailed(format!("连接 SSH Agent 失败: {}", e))
+                })?;
 
-                agent.list_identities()
+                agent
+                    .list_identities()
                     .map_err(|e| SshError::AuthenticationFailed(format!("列出身份失败: {}", e)))?;
 
-                let identities = agent.identities()
+                let identities = agent
+                    .identities()
                     .map_err(|e| SshError::AuthenticationFailed(format!("获取身份失败: {}", e)))?;
 
                 let mut authenticated = false;
@@ -191,7 +194,9 @@ impl SshConnection {
                 }
 
                 if !authenticated {
-                    return Err(SshError::AuthenticationFailed("所有密钥认证失败".to_string()));
+                    return Err(SshError::AuthenticationFailed(
+                        "所有密钥认证失败".to_string(),
+                    ));
                 }
             }
             AuthMethod::Password { password } => {
@@ -219,7 +224,8 @@ impl SshConnection {
     pub fn execute(&mut self, command: &str) -> Result<String> {
         debug!("执行命令: {}", command);
 
-        let mut channel = self.session
+        let mut channel = self
+            .session
             .channel_session()
             .map_err(|e| SshError::CommandFailed(format!("创建 channel 失败: {}", e)))?;
 

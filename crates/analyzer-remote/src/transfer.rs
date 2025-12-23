@@ -53,7 +53,8 @@ impl TransferProgress for ProgressBarCallback {
     }
 
     fn on_error(&mut self, error: &str) {
-        self.bar.abandon_with_message(format!("下载失败: {}", error));
+        self.bar
+            .abandon_with_message(format!("下载失败: {}", error));
     }
 }
 
@@ -86,12 +87,12 @@ impl FileTransfer {
         let sftp = self.connection.sftp()?;
 
         // 获取远程文件信息
-        let remote_stat = sftp
-            .stat(remote_path)
-            .map_err(|e| SshError::IoError(std::io::Error::new(
+        let remote_stat = sftp.stat(remote_path).map_err(|e| {
+            SshError::IoError(std::io::Error::new(
                 std::io::ErrorKind::NotFound,
                 format!("无法获取远程文件信息: {}", e),
-            )))?;
+            ))
+        })?;
 
         let file_size = remote_stat.size.unwrap_or(0);
 
@@ -157,10 +158,12 @@ impl FileTransfer {
             let sftp = self.connection.sftp()?;
             let file_size = sftp
                 .stat(remote_path)
-                .map_err(|e| SshError::IoError(std::io::Error::new(
-                    std::io::ErrorKind::NotFound,
-                    format!("无法获取远程文件信息: {}", e),
-                )))?
+                .map_err(|e| {
+                    SshError::IoError(std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        format!("无法获取远程文件信息: {}", e),
+                    ))
+                })?
                 .size
                 .unwrap_or(0);
 

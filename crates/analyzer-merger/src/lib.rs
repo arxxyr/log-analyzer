@@ -173,9 +173,7 @@ impl TimelineMerger {
         let mut track_stats = HashMap::new();
 
         for event in &all_events {
-            *source_stats
-                .entry(event.source.to_string())
-                .or_insert(0) += 1;
+            *source_stats.entry(event.source.to_string()).or_insert(0) += 1;
 
             let track_name = match &event.track {
                 Track::RoundMarker => "RoundMarker",
@@ -189,7 +187,12 @@ impl TimelineMerger {
         }
 
         tracing::info!("合并完成:");
-        tracing::info!("  - 时间范围: {:.2} ~ {:.2} (共 {:.2}s)", min_time, max_time, max_time - min_time);
+        tracing::info!(
+            "  - 时间范围: {:.2} ~ {:.2} (共 {:.2}s)",
+            min_time,
+            max_time,
+            max_time - min_time
+        );
         tracing::info!("  - 来源统计: {:?}", source_stats);
         tracing::info!("  - 泳道统计: {:?}", track_stats);
 

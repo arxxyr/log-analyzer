@@ -13,9 +13,9 @@ fn main() {
         // MSVC 特定标志
         build
             .flag_if_supported("/std:c++20")
-            .flag_if_supported("/utf-8")     // 强制源码为 UTF-8 编码
-            .flag_if_supported("/EHsc")      // 启用标准 C++ 异常处理
-            .flag("/W3");                    // 警告级别 3
+            .flag_if_supported("/utf-8") // 强制源码为 UTF-8 编码
+            .flag_if_supported("/EHsc") // 启用标准 C++ 异常处理
+            .flag("/W3"); // 警告级别 3
     } else {
         // GCC/Clang 标志
         build

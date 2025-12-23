@@ -8,7 +8,6 @@ use anyhow::Result;
 use plotters::prelude::*;
 use plotters::style::text_anchor::{HPos, Pos, VPos};
 
-use crate::arm_decision_detector::get_tasks_for_round;
 use crate::font_loader::FontLoader;
 use crate::models::{ArmDecisionTask, NavigationFlow, Round, SubStep};
 use crate::utils::timestamp_to_beijing_time;
@@ -28,6 +27,50 @@ pub fn generate_gantt_charts(
     outdir: &str,
     t0: f64,
 ) -> Result<()> {
+    // 检查 arm_decision 日志时间是否与 master_control 匹配
+    if !arm_decision_tasks.is_empty() && !rounds.is_empty() {
+        let first_round_start = rounds[0].start_ts;
+        let last_round_end = rounds
+            .last()
+            .and_then(|r| r.end_ts)
+            .unwrap_or(first_round_start + 3600.0);
+
+        let first_arm_task_start = arm_decision_tasks
+            .iter()
+            .map(|t| t.body_task_start_ts.unwrap_or(t.start_ts))
+            .min_by(|a, b| a.partial_cmp(b).unwrap())
+            .unwrap_or(0.0);
+
+        let last_arm_task_end = arm_decision_tasks
+            .iter()
+            .filter_map(|t| t.end_ts)
+            .max_by(|a, b| a.partial_cmp(b).unwrap())
+            .unwrap_or(first_arm_task_start);
+
+        // 检查时间范围是否有重叠
+        let has_overlap =
+            first_arm_task_start < last_round_end && last_arm_task_end > first_round_start;
+
+        if !has_overlap {
+            eprintln!(
+                "\n[警告] arm_decision 日志时间与 master_control 不匹配！"
+            );
+            eprintln!(
+                "  master_control 时间范围: {:.0} ~ {:.0}",
+                first_round_start, last_round_end
+            );
+            eprintln!(
+                "  arm_decision 时间范围:   {:.0} ~ {:.0}",
+                first_arm_task_start, last_arm_task_end
+            );
+            eprintln!(
+                "  时间差: {:.1} 小时",
+                (first_round_start - last_arm_task_end).abs() / 3600.0
+            );
+            eprintln!("  请确保两个日志来自同一次运行会话。\n");
+        }
+    }
+
     // 按轮次分组flows
     let mut round_flows: HashMap<usize, Vec<&NavigationFlow>> = HashMap::new();
     for flow in flows {
@@ -49,7 +92,19 @@ pub fn generate_gantt_charts(
             .get(&round.id)
             .map(|v| v.as_slice())
             .unwrap_or(&[]);
-        let round_arm_tasks = get_tasks_for_round(arm_decision_tasks, round.id);
+
+        // 筛选与当前轮次时间范围重叠的 arm_decision 任务
+        let round_arm_tasks: Vec<&ArmDecisionTask> = arm_decision_tasks
+            .iter()
+            .filter(|task| {
+                let task_start = task.body_task_start_ts.unwrap_or(task.start_ts);
+                let task_end = task.end_ts.unwrap_or(task_start + 1.0);
+                let round_end = round.end_ts.unwrap_or(round.start_ts + 1000.0);
+                // 检查时间范围是否重叠
+                task_start < round_end && task_end > round.start_ts
+            })
+            .collect();
+
         generate_round_gantt(round, round_flows_data, &round_arm_tasks, outdir, t0, width)?;
     }
 
@@ -61,7 +116,7 @@ pub fn generate_gantt_charts(
 /// # 参数
 /// * `round` - 轮次
 /// * `flows` - 属于该轮次的导航流程列表
-/// * `arm_decision_tasks` - 属于该轮次的 arm_decision 任务
+/// * `arm_decision_tasks` - 与该轮次重叠的 arm_decision 任务列表
 /// * `outdir` - 输出目录
 /// * `t0` - 起始时间戳
 /// * `width` - 编号宽度（用于前导零）
@@ -70,13 +125,13 @@ fn generate_round_gantt(
     flows: &[&NavigationFlow],
     arm_decision_tasks: &[&ArmDecisionTask],
     outdir: &str,
-    t0: f64,
+    _t0: f64,
     width: usize,
 ) -> Result<()> {
     // 创建字体加载器
     let font_loader = FontLoader::default();
 
-    let _round_start = round.start_ts - t0;
+    let _round_start = round.start_ts - _t0;
     let round_duration = round.end_ts.map(|end| end - round.start_ts).unwrap_or(0.0);
 
     // 计算轮次开始和结束的北京时间
@@ -127,10 +182,7 @@ fn generate_round_gantt(
                         };
                         (
                             format!("F{}-arm-{}", flow_id, action_code),
-                            format!(
-                                "机械臂:{}({}){}",
-                                operation.label, action_code, status_suffix
-                            ),
+                            format!("手臂:{}{}", action_code, status_suffix),
                         )
                     }
                     "head" => (format!("F{}-head", flow_id), "头部控制".to_string()),
@@ -160,38 +212,60 @@ fn generate_round_gantt(
         }
     }
 
-    // 添加 arm_decision 任务到图表数据
+    // 添加 arm_decision 任务
     for (task_idx, task) in arm_decision_tasks.iter().enumerate() {
-        // 使用 BodyTask 的时间范围作为主任务条
-        if let (Some(body_start), Some(body_end)) = (task.body_task_start_ts, task.body_task_end_ts)
+        // 使用 BodyTask 的时间范围（如果有）
+        let (task_start_ts, task_end_ts) = if let (Some(body_start), Some(body_end)) =
+            (task.body_task_start_ts, task.body_task_end_ts)
         {
-            let task_start = body_start - round.start_ts;
-            let task_duration = body_end - body_start;
+            (body_start, Some(body_end))
+        } else {
+            (task.start_ts, task.end_ts)
+        };
 
-            // 主任务条（整个 BodyTask）
-            let task_type_str = task.task_type.map(|t| t.to_string()).unwrap_or_default();
-            let label = format!("arm_decision_{}", task_idx);
-            let detail_info = format!("arm_decision(type={})", task_type_str);
+        let task_start = task_start_ts - round.start_ts;
+        let task_duration = task_end_ts.map(|end| end - task_start_ts).unwrap_or(1.0);
 
-            // 构建子步骤（从模块信息）
-            let sub_steps: Vec<SubStep> = task
-                .modules
-                .iter()
-                .map(|m| SubStep {
-                    name: m.name.clone(),
-                    timestamp: m.start_ts,
-                })
-                .collect();
+        // 构建标签
+        let task_type_str = task
+            .task_type
+            .map(|t| t.to_string())
+            .unwrap_or_else(|| "?".to_string());
+        let status_suffix = if task.result_status.map(|s| s != 0).unwrap_or(false) {
+            "[失败]"
+        } else {
+            ""
+        };
 
-            chart_data.push((
-                label,
-                detail_info,
-                task_start.max(0.0),
-                task_duration.max(0.0),
-                "arm_decision".to_string(),
-                sub_steps,
-            ));
-        }
+        let label = format!("arm_decision_{}", task_idx + 1);
+        let detail_info = format!("决策(type={}){}", task_type_str, status_suffix);
+
+        // 将 arm_decision 模块转换为 SubStep，用于在甘特图中显示每个 tick 的详情
+        let module_sub_steps: Vec<SubStep> = task
+            .modules
+            .iter()
+            .map(|module| {
+                // 构建子步骤名称：模块名 + 耗时（如果有）
+                let sub_name = if let Some(cost) = module.cost_s {
+                    format!("{} ({:.2}s)", module.name, cost)
+                } else {
+                    module.name.clone()
+                };
+                SubStep {
+                    name: sub_name,
+                    timestamp: module.start_ts,
+                }
+            })
+            .collect();
+
+        chart_data.push((
+            label,
+            detail_info,
+            task_start.max(0.0),
+            task_duration.max(0.0),
+            "arm_decision".to_string(),
+            module_sub_steps,
+        ));
     }
 
     if chart_data.is_empty() {
@@ -225,10 +299,10 @@ fn generate_round_gantt(
     let type_order = vec![
         ("navigation", "导航"),
         ("preplan", "预打舵"),
-        ("arm", "机械臂"),
-        ("arm_decision", "机械臂决策"),
-        ("head", "头部控制"),
-        ("waist", "腰部控制"),
+        ("arm", "手臂"),
+        ("arm_decision", "手臂决策"),
+        ("head", "头部"),
+        ("waist", "腰部"),
     ];
 
     // 收集所有出现的动作类型并分配Y轴位置
@@ -258,9 +332,9 @@ fn generate_round_gantt(
         round.id,
         width = width
     );
-    let canvas_width = 3600; // 更高分辨率
-    let bar_height = 180; // 增加条形高度
-    let canvas_height = (action_types.len() * bar_height + 400) as u32;
+    let canvas_width = 14400; // 超高分辨率 (4x)
+    let bar_height = 720; // 增加条形高度 (4x)
+    let canvas_height = (action_types.len() * bar_height + 1600) as u32;
 
     let root = BitMapBackend::new(&filename, (canvas_width, canvas_height)).into_drawing_area();
     root.fill(&WHITE)?;
@@ -286,18 +360,18 @@ fn generate_round_gantt(
     };
 
     let mut chart = ChartBuilder::on(&root)
-        .caption(&title, ("sans-serif", 48))
-        .margin(50)
-        .x_label_area_size(100)
-        .y_label_area_size(200)
+        .caption(&title, ("sans-serif", 192))
+        .margin(200)
+        .x_label_area_size(400)
+        .y_label_area_size(800)
         .build_cartesian_2d(0.0..max_time * 1.1, 0.0..(action_types.len() as f64))?;
 
     // 配置网格和标签
     let mut mesh = chart.configure_mesh();
     mesh.y_desc("动作类型")
         .x_desc("时间 (相对于轮次开始的秒数)")
-        .axis_desc_style(("sans-serif", 24))
-        .label_style(("sans-serif", 18))
+        .axis_desc_style(("sans-serif", 96))
+        .label_style(("sans-serif", 72))
         .y_label_formatter(&|y| {
             let idx = *y as usize;
             if idx < action_types.len() {
@@ -316,10 +390,10 @@ fn generate_round_gantt(
         let base_color = match step_type.as_str() {
             "nav" | "navigation" => RGBColor(173, 216, 230), // 浅蓝色 - 导航
             "preplan" => RGBColor(255, 255, 150),            // 浅黄色 - 预打舵
-            "arm" => RGBColor(144, 238, 144),                // 浅绿色 - 机械臂
-            "arm_decision" => RGBColor(152, 251, 152),       // 淡绿色 - 机械臂决策
-            "head" => RGBColor(255, 218, 185),               // 浅橙色 - 头部控制
-            "waist" => RGBColor(221, 160, 221),              // 浅紫色 - 腰部控制
+            "arm" => RGBColor(144, 238, 144),                // 浅绿色 - 手臂
+            "arm_decision" => RGBColor(152, 251, 152),       // 淡绿色 - 手臂决策
+            "head" => RGBColor(255, 218, 185),               // 浅橙色 - 头部
+            "waist" => RGBColor(221, 160, 221),              // 浅紫色 - 腰部
             _ => RGBColor(192, 192, 192),                    // 灰色 - 其他
         };
 
@@ -374,6 +448,8 @@ fn generate_round_gantt(
                 *duration,
                 y_pos + 0.15,
                 y_height,
+                &font_loader,
+                max_time,
             )?;
         }
 
@@ -417,12 +493,15 @@ fn draw_sub_steps<DB: DrawingBackend>(
     duration: f64,
     sub_y_start: f64,
     sub_y_height: f64,
+    font_loader: &FontLoader,
+    total_time_range: f64, // 总时间范围，用于判断子步骤是否足够宽
 ) -> Result<()>
 where
     DB::ErrorType: 'static,
 {
     // 为不同类型的子步骤定义颜色
     let get_sub_step_color = |name: &str| -> RGBColor {
+        // 导航/master_control 相关
         if name == "开始执行" || name.starts_with("开始执行") {
             RGBColor(100, 149, 237) // 矢车菊蓝
         } else if name == "设置导航目标" {
@@ -441,8 +520,38 @@ where
             RGBColor(255, 69, 0) // 红橙色
         } else if name == "执行完成" {
             RGBColor(34, 139, 34) // 森林绿
-        } else {
-            RGBColor(128, 128, 128) // 灰色
+        }
+        // arm_decision 模块颜色
+        else if name.starts_with("GetTaskTypeAction") {
+            RGBColor(135, 206, 250) // 淡天蓝 - 获取任务类型
+        } else if name.starts_with("ExecuteGripperMotionAction") {
+            RGBColor(255, 182, 193) // 浅粉红 - 夹爪动作
+        } else if name.starts_with("GetDetObjPoseAction") {
+            RGBColor(144, 238, 144) // 淡绿 - 检测物体位姿
+        } else if name.starts_with("ModifyArmObstacleAction") {
+            RGBColor(255, 218, 185) // 桃色 - 修改障碍物
+        } else if name.starts_with("SendGoalAction") {
+            RGBColor(255, 215, 0) // 金色 - 发送目标
+        } else if name.starts_with("GetArmPoseAction") {
+            RGBColor(173, 216, 230) // 淡蓝 - 获取手臂位姿
+        } else if name.starts_with("CalcPutDownPoseAction") {
+            RGBColor(221, 160, 221) // 梅红 - 计算放置位姿
+        } else if name.starts_with("CalcArmPoseAction") {
+            RGBColor(238, 130, 238) // 紫罗兰 - 计算手臂位姿
+        } else if name.starts_with("CalcGripperPos") {
+            RGBColor(176, 196, 222) // 淡钢蓝 - 计算夹爪位置
+        } else if name.starts_with("CheckSafe") {
+            RGBColor(152, 251, 152) // 淡绿 - 安全检查
+        } else if name.starts_with("ArmControl") || name.starts_with("ArmControlAction") {
+            RGBColor(255, 160, 122) // 浅鲑鱼色 - 手臂控制
+        } else if name.starts_with("ExecutePose") || name.starts_with("ExecutePoseAction") {
+            RGBColor(240, 128, 128) // 淡珊瑚色 - 执行位姿
+        } else if name.starts_with("WaitForTrigger") {
+            RGBColor(255, 250, 205) // 柠檬绸 - 等待触发
+        }
+        // 默认颜色
+        else {
+            RGBColor(192, 192, 192) // 浅灰色
         }
     };
 
@@ -476,10 +585,100 @@ where
                 ],
                 sub_color.filled(),
             )))?;
+
+            // 计算子步骤在图表中的像素宽度比例
+            // 如果子步骤持续时间足够长（超过总时间范围的0.5%），绘制文字标签
+            let width_ratio = sub_duration / total_time_range;
+            if width_ratio > 0.005 {
+                // 提取简短的模块名称（去除 Action 后缀和耗时信息）
+                let label_text = extract_short_module_name(&sub_steps[i].name);
+
+                // 选择字体大小（根据宽度比例，4x 分辨率）
+                let font_size = if width_ratio > 0.05 {
+                    48
+                } else if width_ratio > 0.02 {
+                    40
+                } else {
+                    32
+                };
+
+                // 在子步骤方块中间绘制标签
+                let text_x = sub_start_clamped + sub_duration / 2.0;
+                let text_y = sub_y_start + sub_y_height / 2.0;
+
+                chart.draw_series(std::iter::once(Text::new(
+                    label_text,
+                    (text_x, text_y),
+                    font_loader
+                        .font_desc(font_size)
+                        .color(&BLACK)
+                        .pos(Pos::new(HPos::Center, VPos::Center))
+                        .transform(FontTransform::None),
+                )))?;
+            }
         }
     }
 
     Ok(())
+}
+
+/// 从子步骤名称中提取简短的模块名称
+/// 例如: "ExecuteGripperMotionAction (0.51s)" -> "Gripper(0.51s)"
+fn extract_short_module_name(full_name: &str) -> String {
+    // 提取耗时信息（如果有）
+    let (name_part, time_part) = if let Some(paren_pos) = full_name.rfind(" (") {
+        let time = &full_name[paren_pos..];
+        let name = &full_name[..paren_pos];
+        (name, time)
+    } else {
+        (full_name, "")
+    };
+
+    // 模块名称简化映射
+    let short_name = if name_part.starts_with("ExecuteGripperMotion") {
+        "夹爪"
+    } else if name_part.starts_with("GetTaskType") {
+        "获取类型"
+    } else if name_part.starts_with("GetDetObjPose") {
+        "检测位姿"
+    } else if name_part.starts_with("ModifyArmObstacle") {
+        "修改障碍"
+    } else if name_part.starts_with("GetArmTransitionPoint") {
+        "过渡点"
+    } else if name_part.starts_with("ExecuteDoubleArmMove") {
+        "双臂运动"
+    } else if name_part.starts_with("GetGoalPose") {
+        "获取目标"
+    } else if name_part.starts_with("GetArmPose") {
+        "手臂位姿"
+    } else if name_part.starts_with("CalcPutDownPose") {
+        "计算放置"
+    } else if name_part.starts_with("CalcArmPose") {
+        "计算位姿"
+    } else if name_part.starts_with("CalcGripperPos") {
+        "夹爪位置"
+    } else if name_part.starts_with("CheckSafe") {
+        "安全检查"
+    } else if name_part.starts_with("ArmControl") {
+        "手臂控制"
+    } else if name_part.starts_with("ExecutePose") {
+        "执行位姿"
+    } else if name_part.starts_with("WaitForTrigger") {
+        "等待触发"
+    } else if name_part.starts_with("GetReadyPose") {
+        "准备位姿"
+    } else if name_part.starts_with("SendGoal") {
+        "发送目标"
+    } else {
+        // 如果名称太长，截取前6个字符
+        if name_part.chars().count() > 8 {
+            &name_part[..name_part.char_indices().nth(8).map(|(i, _)| i).unwrap_or(name_part.len())]
+        } else {
+            name_part
+        }
+    };
+
+    format!("{}{}", short_name, time_part)
 }
 
 /// 绘制时间标注
@@ -501,7 +700,7 @@ where
         start_time_text,
         (start, y_pos + y_height + 0.25),
         font_loader
-            .font_desc(14)
+            .font_desc(56) // 4x 分辨率
             .color(&BLACK)
             .pos(Pos::new(HPos::Left, VPos::Top))
             .transform(FontTransform::None),
@@ -530,7 +729,10 @@ where
     let text_y = y_pos + 0.08;
 
     // 创建主标签文本
-    let label_text = if duration > 20.0 {
+    // 手臂动作使用特殊格式: 手臂:{action_code}-{duration}s
+    let label_text = if step_type == "arm" {
+        format!("{}-{:.1}s", detail_info, duration)
+    } else if duration > 20.0 {
         format!("{}\n总计:{:.1}s", detail_info, duration)
     } else if duration > 10.0 {
         format!("{} ({:.1}s)", detail_info, duration)
@@ -548,7 +750,6 @@ where
             match step_type {
                 "nav" | "navigation" => "导航",
                 "preplan" => "预打舵",
-                "arm" => "机械臂",
                 "arm_decision" => "决策",
                 "head" => "头部",
                 "waist" => "腰部",
@@ -560,15 +761,15 @@ where
         format!("{:.1}s", duration)
     };
 
-    // 选择字体大小
+    // 选择字体大小（4x 分辨率）
     let font_size = if duration > 15.0 {
-        22
+        88
     } else if duration > 8.0 {
-        20
+        80
     } else if duration > 2.0 {
-        18
+        72
     } else {
-        16
+        64
     };
 
     // 绘制主标签
