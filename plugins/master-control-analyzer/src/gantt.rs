@@ -590,8 +590,8 @@ where
             // 如果子步骤持续时间足够长（超过总时间范围的0.5%），绘制文字标签
             let width_ratio = sub_duration / total_time_range;
             if width_ratio > 0.005 {
-                // 提取简短的模块名称（去除 Action 后缀和耗时信息）
-                let label_text = extract_short_module_name(&sub_steps[i].name);
+                // 提取简短的模块名称和时间
+                let (module_name, time_str) = extract_short_module_name(&sub_steps[i].name);
 
                 // 选择字体大小（根据宽度比例，4x 分辨率）
                 let font_size = if width_ratio > 0.05 {
@@ -602,19 +602,34 @@ where
                     32
                 };
 
-                // 在子步骤方块中间绘制标签
+                // 在子步骤方块中间绘制标签（分两行）
                 let text_x = sub_start_clamped + sub_duration / 2.0;
-                let text_y = sub_y_start + sub_y_height / 2.0;
+                let text_y_upper = sub_y_start + sub_y_height * 0.35; // 上行：模块名
+                let text_y_lower = sub_y_start + sub_y_height * 0.65; // 下行：时间
 
+                // 绘制模块名称（上行）
                 chart.draw_series(std::iter::once(Text::new(
-                    label_text,
-                    (text_x, text_y),
+                    module_name,
+                    (text_x, text_y_upper),
                     font_loader
                         .font_desc(font_size)
                         .color(&BLACK)
                         .pos(Pos::new(HPos::Center, VPos::Center))
                         .transform(FontTransform::None),
                 )))?;
+
+                // 绘制时间（下行，如果有）
+                if !time_str.is_empty() {
+                    chart.draw_series(std::iter::once(Text::new(
+                        time_str,
+                        (text_x, text_y_lower),
+                        font_loader
+                            .font_desc(font_size - 8)
+                            .color(&BLACK)
+                            .pos(Pos::new(HPos::Center, VPos::Center))
+                            .transform(FontTransform::None),
+                    )))?;
+                }
             }
         }
     }
@@ -622,9 +637,9 @@ where
     Ok(())
 }
 
-/// 从子步骤名称中提取简短的模块名称（分两行显示）
-/// 例如: "ExecuteGripperMotionAction (0.51s)" -> "夹爪\n0.51s"
-fn extract_short_module_name(full_name: &str) -> String {
+/// 从子步骤名称中提取简短的模块名称和时间（分开返回）
+/// 例如: "ExecuteGripperMotionAction (0.51s)" -> ("夹爪", "0.51s")
+fn extract_short_module_name(full_name: &str) -> (String, String) {
     // 提取耗时信息（如果有）
     let (name_part, time_part) = if let Some(paren_pos) = full_name.rfind(" (") {
         // 提取括号内的时间，去掉括号
@@ -679,12 +694,7 @@ fn extract_short_module_name(full_name: &str) -> String {
         }
     };
 
-    // 分两行显示：模块名称在上，时间在下
-    if time_part.is_empty() {
-        short_name.to_string()
-    } else {
-        format!("{}\n{}", short_name, time_part)
-    }
+    (short_name.to_string(), time_part.to_string())
 }
 
 /// 绘制时间标注
