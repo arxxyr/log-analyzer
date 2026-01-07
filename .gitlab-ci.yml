@@ -1,0 +1,104 @@
+# GitLab CI/CD 配置
+# Rust workspace 项目的持续集成
+
+stages:
+  - check
+  - test
+  - build
+
+variables:
+  CARGO_HOME: ${CI_PROJECT_DIR}/.cargo
+  RUSTFLAGS: "-D warnings"
+  # 使用 nightly（edition 2024 需要）
+  RUST_TOOLCHAIN: nightly
+
+# 缓存 cargo 依赖和构建产物
+.rust-cache: &rust-cache
+  cache:
+    key:
+      files:
+        - Cargo.lock
+    paths:
+      - .cargo/registry/
+      - .cargo/git/
+      - target/
+    policy: pull-push
+
+# 基础镜像配置
+.rust-base: &rust-base
+  image: rust:latest
+  before_script:
+    - rustup default ${RUST_TOOLCHAIN}
+    - rustup component add rustfmt clippy
+    - rustc --version && cargo --version
+
+# ============ Check 阶段 ============
+
+# 代码格式检查
+fmt:
+  <<: *rust-base
+  <<: *rust-cache
+  stage: check
+  script:
+    - cargo fmt --all -- --check
+  allow_failure: false
+
+# Clippy 静态分析
+clippy:
+  <<: *rust-base
+  <<: *rust-cache
+  stage: check
+  script:
+    - cargo clippy --all --all-targets -- -D warnings
+  allow_failure: false
+
+# ============ Test 阶段 ============
+
+# 单元测试
+test:
+  <<: *rust-base
+  <<: *rust-cache
+  stage: test
+  script:
+    - cargo test --all --release
+  needs:
+    - fmt
+    - clippy
+
+# ============ Build 阶段 ============
+
+# Release 构建
+build-release:
+  <<: *rust-base
+  <<: *rust-cache
+  stage: build
+  script:
+    - cargo build --release
+  artifacts:
+    name: "analyzer-${CI_COMMIT_SHORT_SHA}"
+    paths:
+      - target/release/analyzer
+      - target/release/*.so
+    expire_in: 7 days
+  needs:
+    - test
+  only:
+    - main
+    - master
+    - tags
+    - merge_requests
+
+# Debug 构建（用于 MR 快速验证）
+build-debug:
+  <<: *rust-base
+  <<: *rust-cache
+  stage: build
+  script:
+    - cargo build
+  needs:
+    - fmt
+    - clippy
+  except:
+    - main
+    - master
+    - tags
