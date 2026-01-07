@@ -5,9 +5,25 @@
 use std::fs;
 
 use anyhow::Result;
+use chrono::{NaiveDateTime, TimeZone};
+use chrono_tz::Asia::Shanghai;
 use regex::Regex;
 
 use crate::models::LogLine;
+
+/// 将日期时间字符串转换为 Unix 时间戳
+///
+/// # 参数
+/// * `datetime_str` - 格式为 "YYYY-MM-DD HH:MM:SS.microseconds" 的字符串
+///
+/// # 返回
+/// Unix 时间戳（秒，包含小数部分）
+fn parse_datetime_to_unix(datetime_str: &str) -> Option<f64> {
+    // 格式：2025-12-24 17:16:04.520974
+    let naive = NaiveDateTime::parse_from_str(datetime_str, "%Y-%m-%d %H:%M:%S%.f").ok()?;
+    let shanghai_time = Shanghai.from_local_datetime(&naive).single()?;
+    Some(shanghai_time.timestamp() as f64 + shanghai_time.timestamp_subsec_micros() as f64 / 1_000_000.0)
+}
 
 /// 加载并解析日志文件
 ///
@@ -20,8 +36,11 @@ use crate::models::LogLine;
 /// 包含所有带时间戳的日志行的向量，按时间戳升序排列
 ///
 /// # 日志格式
-/// 支持的时间戳格式：`[INFO/WARN/ERROR/DEBUG] [timestamp]`
-/// 例如：`[INFO] [1756803704.695] [master_control]: 日志内容`
+/// 支持两种时间戳格式：
+/// 1. 新格式：`YYYY-MM-DD HH:MM:SS.microseconds [module] [thread_id] [LEVEL] ...`
+///    例如：`2025-12-24 17:16:04.520974 [master_control] [0xF1EE3541] [INFO] ...`
+/// 2. 旧格式：`[INFO/WARN/ERROR/DEBUG] [timestamp]`
+///    例如：`[INFO] [1756803704.695] [master_control]: 日志内容`
 ///
 /// # 错误处理
 /// - 如果文件不存在，返回错误
@@ -37,12 +56,27 @@ pub fn load_log_lines(log_path: &str) -> Result<Vec<LogLine>> {
         }
     };
 
-    // 时间戳格式：[INFO/WARN/ERROR/DEBUG] [timestamp]
-    let ts_regex = Regex::new(r"\[(?:INFO|WARN|ERROR|DEBUG)\]\s*\[(\d{9,}\.\d+)\]")?;
+    // 新格式时间戳：YYYY-MM-DD HH:MM:SS.microseconds
+    let new_ts_regex = Regex::new(r"^(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\.\d+)")?;
+    // 旧格式时间戳：[INFO/WARN/ERROR/DEBUG] [timestamp]
+    let old_ts_regex = Regex::new(r"\[(?:INFO|WARN|ERROR|DEBUG)\]\s*\[(\d{9,}\.\d+)\]")?;
+
     let mut lines = Vec::new();
 
     for line in content.lines() {
-        if let Some(caps) = ts_regex.captures(line)
+        // 先尝试新格式
+        if let Some(caps) = new_ts_regex.captures(line) {
+            if let Some(timestamp) = parse_datetime_to_unix(&caps[1]) {
+                lines.push(LogLine {
+                    timestamp,
+                    line: line.to_string(),
+                });
+                continue;
+            }
+        }
+
+        // 回退到旧格式
+        if let Some(caps) = old_ts_regex.captures(line)
             && let Ok(timestamp) = caps[1].parse::<f64>()
         {
             lines.push(LogLine {

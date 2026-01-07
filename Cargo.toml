@@ -39,6 +39,7 @@ libloading = "0.8"
 regex = "1.12.2"
 csv = "1.4.0"
 chrono = { version = "0.4", features = ["serde"] }
+chrono-tz = "0.10"
 plotters = "0.3"
 
 # 日志记录

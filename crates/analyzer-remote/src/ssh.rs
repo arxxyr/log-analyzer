@@ -292,6 +292,30 @@ impl SshConnection {
         Ok(files)
     }
 
+    /// 查找最新的日期目录（格式如 20251226）
+    /// 返回完整路径，如 /home/linux/.ros/log/20251226
+    pub fn find_latest_date_dir(&mut self, base_path: &str) -> Result<Option<String>> {
+        debug!("查找最新日期目录: {}", base_path);
+
+        // 列出所有以数字开头的目录，按名称降序排列（最新日期在前）
+        // 日期格式：YYYYMMDD（8位数字）
+        let command = format!(
+            "ls -1d {}/[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9] 2>/dev/null | sort -r | head -1",
+            base_path
+        );
+
+        let output = self.execute(&command)?;
+        let dir = output.trim();
+
+        if dir.is_empty() {
+            info!("未找到日期目录");
+            Ok(None)
+        } else {
+            info!("找到最新日期目录: {}", dir);
+            Ok(Some(dir.to_string()))
+        }
+    }
+
     /// 获取 SFTP session
     pub fn sftp(&self) -> Result<ssh2::Sftp> {
         self.session

@@ -85,9 +85,14 @@ pub struct RemoteConfig {
     #[serde(default)]
     pub auth: AuthConfig,
 
-    /// 日志目录
+    /// 日志目录（基础目录，不包含日期子目录）
     #[serde(default = "default_remote_log_dir")]
     pub log_dir: PathBuf,
+
+    /// 是否使用最新的日期子目录（如 20251226）
+    /// 启用后会自动查找 log_dir 下最新的日期格式子目录
+    #[serde(default)]
+    pub use_latest_date_dir: bool,
 
     /// 超时配置
     #[serde(default)]
@@ -119,6 +124,7 @@ impl Default for RemoteConfig {
             user: default_user(),
             auth: AuthConfig::default(),
             log_dir: default_remote_log_dir(),
+            use_latest_date_dir: false,
             timeouts: Timeouts::default(),
         }
     }
@@ -315,6 +321,14 @@ pub struct AnalyzerMapping {
     /// 优先级（数字越大越优先）
     #[serde(default)]
     pub priority: i32,
+
+    /// 自定义远程日志目录（可选，不设置则使用 remote.log_dir）
+    #[serde(default)]
+    pub remote_log_dir: Option<PathBuf>,
+
+    /// 是否使用最新的日期子目录（针对此分析器）
+    #[serde(default)]
+    pub use_latest_date_dir: bool,
 
     /// 插件特定配置
     #[serde(default)]
@@ -593,6 +607,8 @@ impl Default for AnalyzerConfig {
                 required: true,
                 is_primary: true,
                 priority: 0,
+                remote_log_dir: None,
+                use_latest_date_dir: false,
                 config: None,
             }],
             multi_file: MultiFileConfig::default(),

@@ -18,7 +18,6 @@ use analyzer_core::*;
 use anyhow::Result;
 
 // 模块声明
-pub mod arm_decision_detector;
 pub mod csv_exporter;
 pub mod flow_detector;
 mod font_loader;
@@ -30,8 +29,7 @@ pub mod utils;
 
 // 重新导出常用类型
 pub use models::{
-    ActionOperation, ArmDecisionModule, ArmDecisionTask, CsvRecord, LogLine, MajorFlow,
-    NavigationFlow, Round, SubStep,
+    ActionOperation, CsvRecord, LogLine, MajorFlow, NavigationFlow, Round, SubStep,
 };
 
 // ============================================================================
@@ -79,40 +77,10 @@ impl AnalyzerPlugin for MasterControlAnalyzer {
     }
 }
 
-/// 查找同目录下的 arm_decision 日志文件
-fn find_arm_decision_logs(input_file: &str) -> Vec<String> {
-    use std::path::Path;
-
-    let input_path = Path::new(input_file);
-    let parent_dir = match input_path.parent() {
-        Some(dir) => dir,
-        None => return Vec::new(),
-    };
-
-    let mut arm_decision_files = Vec::new();
-
-    if let Ok(entries) = std::fs::read_dir(parent_dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if let Some(filename) = path.file_name().and_then(|n| n.to_str()) {
-                // 匹配 arm_decision*.log 文件
-                if filename.starts_with("arm_decision") && filename.ends_with(".log") {
-                    if let Some(path_str) = path.to_str() {
-                        arm_decision_files.push(path_str.to_string());
-                    }
-                }
-            }
-        }
-    }
-
-    arm_decision_files
-}
-
 /// 内部分析函数（使用原生 Rust 类型）
 ///
 /// 封装了完整的分析流程，从日志解析到结果输出。
 fn run_analysis_internal(input_file: &str, output_dir: &str) -> Result<AnalyzeResult> {
-    use arm_decision_detector::{detect_arm_decision_tasks, load_arm_decision_log_lines};
     use csv_exporter::{
         build_csv_records, export_csv, export_major_flow_stats, generate_action_timeline_csv,
     };
@@ -142,30 +110,24 @@ fn run_analysis_internal(input_file: &str, output_dir: &str) -> Result<AnalyzeRe
     let flows = detect_flows(&lines, &rounds)?;
     let flow_count = flows.len();
 
-    // 4.5. 自动查找并加载 arm_decision 日志
-    let arm_decision_logs = find_arm_decision_logs(input_file);
-    let mut all_arm_decision_tasks = Vec::new();
-    for arm_log in &arm_decision_logs {
-        if let Ok(arm_lines) = load_arm_decision_log_lines(arm_log) {
-            if let Ok(tasks) = detect_arm_decision_tasks(&arm_lines) {
-                all_arm_decision_tasks.extend(tasks);
-            }
-        }
-    }
-    let arm_decision_task_count = all_arm_decision_tasks.len();
-
     // 统计各类动作
     let mut nav_count = 0;
     let mut arm_count = 0;
     let mut head_count = 0;
     let mut waist_count = 0;
+    let mut preplan_count = 0;
     for flow in &flows {
-        nav_count += 1;
+        // 只有有导航动作的流程才计入导航数
+        if flow.nav_start_ts.is_some() {
+            nav_count += 1;
+        }
         for op in &flow.operations {
             match op.action_type.as_str() {
+                "navigation" => nav_count += 1,
                 "arm" => arm_count += 1,
                 "head" => head_count += 1,
                 "waist" => waist_count += 1,
+                "preplan" => preplan_count += 1,
                 _ => {}
             }
         }
@@ -197,8 +159,8 @@ fn run_analysis_internal(input_file: &str, output_dir: &str) -> Result<AnalyzeRe
         description: "大流程统计（完整/不完整流程汇总）".into(),
     });
 
-    // 生成甘特图（包含 arm_decision 数据）
-    generate_gantt_charts(&flows, &rounds, &all_arm_decision_tasks, output_dir, t0)?;
+    // 生成甘特图
+    generate_gantt_charts(&flows, &rounds, output_dir, t0)?;
     for round in &rounds {
         let width = if rounds.len() >= 100 {
             3
@@ -232,32 +194,22 @@ fn run_analysis_internal(input_file: &str, output_dir: &str) -> Result<AnalyzeRe
     let timeline = build_timeline(input_file, &rounds, &flows, t0, t_last)?;
 
     // 9. 构建分析摘要
-    let arm_decision_info = if arm_decision_task_count > 0 {
-        format!(
-            "\n         - 检测到 {} 个 arm_decision 任务（来自 {} 个日志文件）",
-            arm_decision_task_count,
-            arm_decision_logs.len()
-        )
-    } else {
-        String::new()
-    };
-
     let summary = format!(
         "分析完成！\n\
          - 检测到 {} 个轮次\n\
          - 检测到 {} 个大流程\n\
          - 检测到 {} 个导航流程\n\
-         - 动作统计: {} 导航, {} 手臂, {} 头部, {} 腰部{}\n\
+         - 动作统计: {} 导航, {} 预打舵, {} 手臂, {} 头部, {} 腰部\n\
          - 生成 {} 条 CSV 记录\n\
          - 输出目录: {}",
         round_count,
         major_flow_count,
         flow_count,
         nav_count,
+        preplan_count,
         arm_count,
         head_count,
         waist_count,
-        arm_decision_info,
         record_count,
         output_dir
     );

@@ -1,15 +1,23 @@
 //! 轮次检测模块
 //!
 //! 本模块负责从日志中检测任务轮次和大流程
+//!
+//! 新主控架构支持三种循环类型：
+//! - 初始循环：`[层级 X] ===== 初始循环开始（气密设备为空）=====`
+//! - 常规循环：`[层级 X] 常规循环 N`
+//! - 最终循环：`[层级 X] 最终循环：取出气密工件并放置`
 
 use anyhow::Result;
 use regex::Regex;
 
-use crate::models::{LogLine, MajorFlow, Round};
+use crate::models::{CycleType, LogLine, MajorFlow, Round};
 
-/// 检测日志中的任务轮次
+/// 检测日志中的任务轮次（新主控架构）
 ///
-/// 基于循环标记（"循环N: 开始循环N"）自动检测任务轮次
+/// 基于循环标记自动检测任务轮次，支持三种循环类型：
+/// - 初始循环：气密设备为空时执行
+/// - 常规循环：迭代执行的主循环（可执行N次）
+/// - 最终循环：取出气密工件并放置
 ///
 /// # 参数
 /// * `lines` - 日志行切片
@@ -18,32 +26,167 @@ use crate::models::{LogLine, MajorFlow, Round};
 /// # 返回
 /// 包含所有检测到的轮次的向量
 pub fn detect_rounds(lines: &[LogLine], t_last: f64) -> Result<Vec<Round>> {
-    // 循环标记格式：循环N: 开始循环N
-    let loop_regex = Regex::new(r"\[发布日志节点\]:\s*\[INFO\]\s*循环(\d+):\s*开始循环\d+")?;
+    // 新主控架构的循环标记格式
+    // 初始循环开始: [层级 X] ===== 初始循环开始（气密设备为空）=====
+    let init_start_regex =
+        Regex::new(r"\[层级\s*(\d+)\]\s*=+\s*初始循环开始（气密设备为空）\s*=+")?;
+    // 初始循环完成: [层级 X] 初始循环完成，气密设备中有工件
+    let init_end_regex = Regex::new(r"\[层级\s*(\d+)\]\s*初始循环完成，气密设备中有工件")?;
+
+    // 常规循环开始: [层级 X] 常规循环 N
+    let normal_start_regex = Regex::new(r"\[层级\s*(\d+)\]\s*常规循环\s*(\d+)\s*$")?;
+    // 常规循环完成: [层级 X] 常规循环 N 完成
+    let normal_end_regex = Regex::new(r"\[层级\s*(\d+)\]\s*常规循环\s*(\d+)\s*完成")?;
+
+    // 最终循环开始: [层级 X] 最终循环：取出气密工件并放置
+    let final_start_regex = Regex::new(r"\[层级\s*(\d+)\]\s*最终循环：取出气密工件并放置")?;
+    // 最终循环完成: [层级 X] 最终循环完成
+    let final_end_regex = Regex::new(r"\[层级\s*(\d+)\]\s*最终循环完成")?;
+
+    // 旧格式兼容：循环N: 开始循环N
+    let legacy_loop_regex = Regex::new(r"\[发布日志节点\]:\s*\[INFO\]\s*循环(\d+):\s*开始循环\d+")?;
     let pose_regex = Regex::new(r"\[master_control\]:\s*姿态字符串:\s*(\{.*\})")?;
 
     let mut rounds = Vec::new();
     let mut current: Option<Round> = None;
 
     for line in lines {
-        // 检测循环开始
-        if let Some(caps) = loop_regex.captures(&line.line) {
-            let loop_number = caps[1].parse::<u32>().ok();
+        // 检测初始循环开始
+        if let Some(caps) = init_start_regex.captures(&line.line) {
+            let layer_index = caps[1].parse::<u32>().unwrap_or(0);
 
             // 如果当前有进行中的轮次，先结束它
-            if let Some(mut round) = current {
+            if let Some(mut round) = current.take() {
                 if round.end_ts.is_none() {
-                    // 使用当前行时间戳作为上一轮的结束时间
                     round.end_ts = Some(line.timestamp);
                 }
                 rounds.push(round);
             }
 
-            // 开始新的轮次（每个循环标记都创建一个新轮次）
+            // 开始新的初始循环
             let id = rounds.len() + 1;
             current = Some(Round {
                 id,
+                loop_number: Some(0), // 初始循环用0表示
+                cycle_type: CycleType::Initial,
+                layer_index,
+                start_ts: line.timestamp,
+                end_ts: None,
+                pose0: None,
+                pose6: None,
+            });
+            continue;
+        }
+
+        // 检测初始循环完成
+        if init_end_regex.is_match(&line.line) {
+            if let Some(ref mut round) = current {
+                if matches!(round.cycle_type, CycleType::Initial) {
+                    round.end_ts = Some(line.timestamp);
+                    rounds.push(current.take().unwrap());
+                }
+            }
+            continue;
+        }
+
+        // 检测常规循环开始
+        if let Some(caps) = normal_start_regex.captures(&line.line) {
+            let layer_index = caps[1].parse::<u32>().unwrap_or(0);
+            let cycle_number = caps[2].parse::<u32>().unwrap_or(1);
+
+            // 如果当前有进行中的轮次，先结束它
+            if let Some(mut round) = current.take() {
+                if round.end_ts.is_none() {
+                    round.end_ts = Some(line.timestamp);
+                }
+                rounds.push(round);
+            }
+
+            // 开始新的常规循环
+            let id = rounds.len() + 1;
+            current = Some(Round {
+                id,
+                loop_number: Some(cycle_number),
+                cycle_type: CycleType::Normal(cycle_number),
+                layer_index,
+                start_ts: line.timestamp,
+                end_ts: None,
+                pose0: None,
+                pose6: None,
+            });
+            continue;
+        }
+
+        // 检测常规循环完成
+        if let Some(caps) = normal_end_regex.captures(&line.line) {
+            let cycle_number = caps[2].parse::<u32>().unwrap_or(1);
+            if let Some(ref mut round) = current {
+                if matches!(round.cycle_type, CycleType::Normal(n) if n == cycle_number) {
+                    round.end_ts = Some(line.timestamp);
+                    rounds.push(current.take().unwrap());
+                }
+            }
+            continue;
+        }
+
+        // 检测最终循环开始
+        if let Some(caps) = final_start_regex.captures(&line.line) {
+            let layer_index = caps[1].parse::<u32>().unwrap_or(0);
+
+            // 如果当前有进行中的轮次，先结束它
+            if let Some(mut round) = current.take() {
+                if round.end_ts.is_none() {
+                    round.end_ts = Some(line.timestamp);
+                }
+                rounds.push(round);
+            }
+
+            // 开始新的最终循环
+            let id = rounds.len() + 1;
+            current = Some(Round {
+                id,
+                loop_number: Some(999), // 最终循环用999表示
+                cycle_type: CycleType::Final,
+                layer_index,
+                start_ts: line.timestamp,
+                end_ts: None,
+                pose0: None,
+                pose6: None,
+            });
+            continue;
+        }
+
+        // 检测最终循环完成
+        if final_end_regex.is_match(&line.line) {
+            if let Some(ref mut round) = current {
+                if matches!(round.cycle_type, CycleType::Final) {
+                    round.end_ts = Some(line.timestamp);
+                    rounds.push(current.take().unwrap());
+                }
+            }
+            continue;
+        }
+
+        // 旧格式兼容检测
+        if let Some(caps) = legacy_loop_regex.captures(&line.line) {
+            let loop_number = caps[1].parse::<u32>().ok();
+
+            // 如果当前有进行中的轮次，先结束它
+            if let Some(mut round) = current.take() {
+                if round.end_ts.is_none() {
+                    round.end_ts = Some(line.timestamp);
+                }
+                rounds.push(round);
+            }
+
+            // 开始新的轮次（旧格式，作为常规循环处理）
+            let id = rounds.len() + 1;
+            let cycle_num = loop_number.unwrap_or(1);
+            current = Some(Round {
+                id,
                 loop_number,
+                cycle_type: CycleType::Normal(cycle_num),
+                layer_index: 0,
                 start_ts: line.timestamp,
                 end_ts: None,
                 pose0: None,

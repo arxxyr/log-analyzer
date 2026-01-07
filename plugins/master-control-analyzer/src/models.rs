@@ -13,13 +13,38 @@ pub struct LogLine {
     pub line: String,
 }
 
+/// 循环类型枚举
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CycleType {
+    /// 初始循环（气密设备为空时执行）
+    Initial,
+    /// 常规循环（迭代执行的主循环，编号从1开始）
+    Normal(u32),
+    /// 最终循环（取出气密工件并放置）
+    Final,
+}
+
+impl std::fmt::Display for CycleType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CycleType::Initial => write!(f, "初始循环"),
+            CycleType::Normal(n) => write!(f, "常规循环 {}", n),
+            CycleType::Final => write!(f, "最终循环"),
+        }
+    }
+}
+
 /// 任务轮次
 #[derive(Debug, Clone)]
 pub struct Round {
     /// 轮次ID
     pub id: usize,
-    /// 循环编号（如循环1、循环2等）
+    /// 循环编号（如循环1、循环2等）- 保留用于向后兼容
     pub loop_number: Option<u32>,
+    /// 循环类型（初始循环/常规循环/最终循环）
+    pub cycle_type: CycleType,
+    /// 层级索引（用于多层级场景）
+    pub layer_index: u32,
     /// 开始时间戳
     pub start_ts: f64,
     /// 结束时间戳
@@ -98,48 +123,6 @@ pub struct MajorFlow {
     pub is_complete: bool,
     /// 失败点（如果不完整）
     pub failure_point: Option<String>,
-}
-
-// ============================================================================
-// arm_decision 相关结构（用于合并到主甘特图）
-// ============================================================================
-
-/// arm_decision 任务中的子模块
-#[derive(Debug, Clone)]
-pub struct ArmDecisionModule {
-    /// 模块名称（如 GetTaskTypeAction, ModifyArmObstacleAction 等）
-    pub name: String,
-    /// cmd_code
-    pub cmd_code: Option<u32>,
-    /// 开始时间戳
-    pub start_ts: f64,
-    /// 结束时间戳
-    pub end_ts: Option<f64>,
-    /// 耗时（秒）- 从日志中的 cost(s) 提取
-    pub cost_s: Option<f64>,
-    /// 状态（ok/pending）
-    pub status: String,
-}
-
-/// arm_decision 完整任务（从 Received goal 到 result->message）
-#[derive(Debug, Clone)]
-pub struct ArmDecisionTask {
-    /// 任务开始时间戳（Received goal）
-    pub start_ts: f64,
-    /// 任务结束时间戳（result->message）
-    pub end_ts: Option<f64>,
-    /// BodyTask 开始时间戳
-    pub body_task_start_ts: Option<f64>,
-    /// BodyTask 结束时间戳
-    pub body_task_end_ts: Option<f64>,
-    /// task_type（如 2000, 2015 等）
-    pub task_type: Option<u32>,
-    /// 结果状态码
-    pub result_status: Option<i32>,
-    /// 结果消息
-    pub result_message: Option<String>,
-    /// 子模块列表
-    pub modules: Vec<ArmDecisionModule>,
 }
 
 // ============================================================================

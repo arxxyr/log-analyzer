@@ -272,6 +272,7 @@ pub fn generate_action_timeline_csv(
         flow_id: usize,
         action_type: String,
         action_label: String,
+        phase: String, // 阶段名称（空表示主动作）
         start_time_abs: f64,
         start_time_rel: f64,
         end_time_abs: Option<f64>,
@@ -292,11 +293,17 @@ pub fn generate_action_timeline_csv(
             let nav_end = flow.nav_end_ts;
             let duration = nav_end.map(|end| end - nav_start);
 
+            let action_label = match flow.nav_target_pos.as_deref() {
+                Some(pos) => format!("导航→{}", pos),
+                None => "导航".to_string(),
+            };
+
             all_actions.push(ActionRecord {
                 round_id,
                 flow_id,
                 action_type: "导航".to_string(),
-                action_label: format!("导航→{}", flow.nav_target_pos.as_deref().unwrap_or("未知")),
+                action_label: action_label.clone(),
+                phase: String::new(),
                 start_time_abs: nav_start,
                 start_time_rel: nav_start - t0,
                 end_time_abs: nav_end,
@@ -304,15 +311,49 @@ pub fn generate_action_timeline_csv(
                 duration,
                 status: flow.nav_status.clone(),
             });
+
+            // 添加导航的子阶段
+            for (i, sub_step) in flow.nav_sub_steps.iter().enumerate() {
+                let sub_end = if i + 1 < flow.nav_sub_steps.len() {
+                    Some(flow.nav_sub_steps[i + 1].timestamp)
+                } else {
+                    nav_end
+                };
+                let sub_duration = sub_end.map(|e| e - sub_step.timestamp);
+
+                all_actions.push(ActionRecord {
+                    round_id,
+                    flow_id,
+                    action_type: "导航".to_string(),
+                    action_label: action_label.clone(),
+                    phase: sub_step.name.clone(),
+                    start_time_abs: sub_step.timestamp,
+                    start_time_rel: sub_step.timestamp - t0,
+                    end_time_abs: sub_end,
+                    end_time_rel: sub_end.map(|e| e - t0),
+                    duration: sub_duration,
+                    status: "phase".to_string(),
+                });
+            }
         }
 
         // 添加其他动作
         for operation in &flow.operations {
+            // 如果这个 navigation 已经从 nav_start_ts 添加了，跳过（按时间戳匹配避免重复）
+            if operation.action_type == "navigation" {
+                if let (Some(nav_start), Some(op_start)) = (flow.nav_start_ts, operation.start_ts) {
+                    // 时间戳差异小于 0.01 秒认为是同一个导航
+                    if (nav_start - op_start).abs() < 0.01 {
+                        continue;
+                    }
+                }
+            }
             if let Some(start) = operation.start_ts {
                 let end = operation.end_ts;
                 let duration = end.map(|e| e - start);
 
                 let action_label = match operation.action_type.as_str() {
+                    "navigation" => "导航".to_string(),
                     "arm" => format!(
                         "机械臂:{}(code:{})",
                         operation.label,
@@ -320,21 +361,25 @@ pub fn generate_action_timeline_csv(
                     ),
                     "head" => "头部控制".to_string(),
                     "waist" => "腰部控制".to_string(),
+                    "preplan" => operation.label.clone(),
                     _ => operation.label.clone(),
                 };
 
                 let action_type_display = match operation.action_type.as_str() {
+                    "navigation" => "导航".to_string(),
                     "arm" => "机械臂".to_string(),
                     "head" => "头部".to_string(),
                     "waist" => "腰部".to_string(),
+                    "preplan" => "预打舵".to_string(),
                     _ => operation.action_type.clone(),
                 };
 
                 all_actions.push(ActionRecord {
                     round_id,
                     flow_id,
-                    action_type: action_type_display,
-                    action_label,
+                    action_type: action_type_display.clone(),
+                    action_label: action_label.clone(),
+                    phase: String::new(),
                     start_time_abs: start,
                     start_time_rel: start - t0,
                     end_time_abs: end,
@@ -342,6 +387,30 @@ pub fn generate_action_timeline_csv(
                     duration,
                     status: operation.status.clone(),
                 });
+
+                // 添加动作的子阶段
+                for (i, sub_step) in operation.sub_steps.iter().enumerate() {
+                    let sub_end = if i + 1 < operation.sub_steps.len() {
+                        Some(operation.sub_steps[i + 1].timestamp)
+                    } else {
+                        end
+                    };
+                    let sub_duration = sub_end.map(|e| e - sub_step.timestamp);
+
+                    all_actions.push(ActionRecord {
+                        round_id,
+                        flow_id,
+                        action_type: action_type_display.clone(),
+                        action_label: action_label.clone(),
+                        phase: sub_step.name.clone(),
+                        start_time_abs: sub_step.timestamp,
+                        start_time_rel: sub_step.timestamp - t0,
+                        end_time_abs: sub_end,
+                        end_time_rel: sub_end.map(|e| e - t0),
+                        duration: sub_duration,
+                        status: "phase".to_string(),
+                    });
+                }
             }
         }
     }
@@ -359,6 +428,7 @@ pub fn generate_action_timeline_csv(
         "流程",
         "动作类型",
         "动作详情",
+        "阶段",
         "开始时间(秒)",
         "结束时间(秒)",
         "持续时间(秒)",
@@ -394,6 +464,7 @@ pub fn generate_action_timeline_csv(
             flow_str,
             action.action_type.clone(),
             action.action_label.clone(),
+            action.phase.clone(),
             start_rel_str,
             end_rel_str,
             duration_str,

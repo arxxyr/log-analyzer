@@ -1,6 +1,30 @@
 //! 流程检测模块
 //!
 //! 本模块负责从日志中检测导航流程和各类动作操作
+//!
+//! 支持的日志格式：
+//!
+//! 1. BehaviorTree 节点格式：
+//!    - 开始：`========== BehaviorTree 节点开始 ==========` + `节点ID: xxx`
+//!    - 结束：`========== BehaviorTree 节点结束 ==========` + `结果: SUCCESS`
+//!    - 中间动作：`[ModuleName] node=xxx phase=start/end ...`
+//!
+//! 2. ROS2ActionAdapter 格式：
+//!    - 开始：`ROS2ActionAdapter[<type>] - 开始执行`
+//!    - 结束：`ROS2ActionAdapter[<type>] - 执行完成，结果: 成功`
+//!
+//! 3. PrePlanNavigationNode 格式（预打舵）：
+//!    - 开始：`PrePlanNavigationNode[xxx] - 开始执行`
+//!    - 目标：`PrePlanNavigationNode[xxx] - 设置预规划目标:`
+//!    - 结束：`PrePlanNavigationNode[xxx] - 执行成功`
+//!
+//! 支持的动作类型：
+//! - navigation: 导航
+//! - double_arm/arm: 双臂控制
+//! - waist_control: 腰部控制
+//! - head_control: 头部控制
+//! - preplan: 预打舵
+//! - behavior_tree: BehaviorTree 节点（包含多个子动作）
 
 use anyhow::Result;
 use regex::Regex;
@@ -10,11 +34,10 @@ use crate::round_detector::ts_to_round_id;
 
 /// 检测日志中的导航流程和动作操作
 ///
-/// 从日志行中提取所有导航流程，包括：
-/// - 导航动作（NavAction/NavAction2）
-/// - 机械臂动作（DoubleArmAction）
-/// - 头部控制动作（HeadControlAction/HeadControlAction2）
-/// - 腰部控制动作（WaistAction/WaistAction2）
+/// 支持的日志格式：
+/// 1. ROS2ActionAdapter 格式：`ROS2ActionAdapter[type] - 开始执行/执行完成`
+/// 2. BehaviorTree 节点格式
+/// 3. PrePlanNavigationNode 格式（预打舵）
 ///
 /// # 参数
 /// * `lines` - 日志行切片
@@ -23,322 +46,724 @@ use crate::round_detector::ts_to_round_id;
 /// # 返回
 /// 包含所有检测到的导航流程的向量
 pub fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<NavigationFlow>> {
-    // 导航相关正则 (支持 NavAction 和 NavAction2)
-    let nav_start_regex = Regex::new(r"\[导航\]:\s*NavAction2?\[NavAction2?\]\s*-\s*开始执行")?;
-    let nav_target_regex = Regex::new(r"设置导航目标:\s*pos\(([^)]+)\),\s*ori\(([^)]+)\)")?;
-    let nav_send_regex = Regex::new(r"\[导航\]:\s*发送导航目标")?;
-    let nav_response_regex =
-        Regex::new(r"\[导航\]:\s*\[RESPONSE CALLBACK\]\s*-\s*目标已被服务端接受")?;
-    let nav_result_regex = Regex::new(r"\[导航\]:\s*\[RESULT CALLBACK\]")?;
-    let nav_end_regex =
-        Regex::new(r"\[导航\]:\s*NavAction2?\[NavAction2?\]\s*-\s*执行完成，结果:")?;
+    // ============================================================
+    // 新格式正则（ROS2ActionAdapter）
+    // ============================================================
+    // ROS2ActionAdapter[type] - 开始执行
+    let adapter_start_regex = Regex::new(r"ROS2ActionAdapter\[(\w+)\]\s*-\s*开始执行")?;
+    // ROS2ActionAdapter[type] - 等待服务器 'xxx'...
+    let adapter_wait_regex =
+        Regex::new(r"ROS2ActionAdapter\[(\w+)\]\s*-\s*等待服务器\s*'([^']+)'")?;
+    // ROS2ActionAdapter[type] - 服务器已就绪
+    let adapter_ready_regex =
+        Regex::new(r"ROS2ActionAdapter\[(\w+)\]\s*-\s*服务器已就绪")?;
+    // ROS2ActionAdapter[type] - 发送目标
+    let adapter_send_regex =
+        Regex::new(r"ROS2ActionAdapter\[(\w+)\]\s*-\s*发送目标")?;
+    // ROS2ActionAdapter[type] - 执行完成，结果: (成功|失败)
+    let adapter_end_regex =
+        Regex::new(r"ROS2ActionAdapter\[(\w+)\]\s*-\s*执行完成，结果:\s*(\S+)")?;
+    // ROS2ActionAdapter[xxx] - [RESPONSE] 目标已被接受
+    let adapter_response_regex =
+        Regex::new(r"ROS2ActionAdapter\[(\w+)\]\s*-\s*\[RESPONSE\]\s*目标已被接受")?;
+    // ROS2ActionAdapter[xxx] - [RESULT] 完成，成功: 是, 消息: xxx
+    let adapter_result_regex =
+        Regex::new(r"ROS2ActionAdapter\[(\w+)\]\s*-\s*\[RESULT\]\s*完成，成功:\s*(\S+)")?;
 
-    // 导航完成的正则（匹配日志中的实际格式）
-    let nav_complete_regex =
-        Regex::new(r"\[导航\]:\s*\[RESULT CALLBACK\]\s*-\s*导航完成，结果代码:")?;
-
-    // 额外添加对 NavAction[NavAction] 格式的支持
-    let nav_start_alt_regex = Regex::new(r"\[导航\]:\s*NavAction\[NavAction\]\s*-\s*开始执行")?;
-
-    // 机械臂相关正则
-    let arm_start_regex = Regex::new(r"\[机械臂\]:\s*DoubleArmAction\[([^\]]+)\]\s*-\s*开始执行")?;
-    let arm_setgoal_regex =
-        Regex::new(r"\[机械臂\]:\s*DoubleArmAction\s+setGoal\s+action_type_code:\s*(\d+)")?;
-    let arm_send_regex = Regex::new(r"\[机械臂\]:\s*发送机械臂控制目标")?;
-    let arm_response_regex =
-        Regex::new(r"\[机械臂\]:\s*\[RESPONSE CALLBACK\]\s*-\s*目标已被服务端接受")?;
-    let arm_result_regex =
-        Regex::new(r"\[机械臂\]:\s*\[RESULT CALLBACK\]\s*-\s*机械臂动作完成，状态:\s*(\d+)")?;
-    let arm_complete_regex =
-        Regex::new(r"\[机械臂\]:\s*DoubleArmAction\[([^\]]+)\]\s*-\s*执行完成，结果:")?;
-
-    // 头部控制相关正则 (支持 HeadControlAction 和 HeadControlAction2)
-    let head_start_regex =
-        Regex::new(r"\[头部控制\]:\s*HeadControlAction2?\[head_control\]\s*-\s*开始执行")?;
-    let head_send_regex = Regex::new(r"\[头部控制\]:\s*发送头部控制目标")?;
-    let head_response_regex =
-        Regex::new(r"\[头部控制\]:\s*\[RESPONSE CALLBACK\]\s*-\s*目标已被服务端接受")?;
-    let head_result_regex = Regex::new(r"\[头部控制\]:\s*\[RESULT CALLBACK\]\s*-\s*头部动作完成")?;
-    let head_end_regex =
-        Regex::new(r"\[头部控制\]:\s*HeadControlAction2?\[head_control\]\s*-\s*执行完成")?;
-
-    // 腰部控制相关正则 (支持 WaistAction 和 WaistAction2)
-    let waist_start_regex =
-        Regex::new(r"\[腰部\]:\s*WaistAction2?\[WaistAction2?\]\s*-\s*开始执行")?;
-    let waist_send_regex = Regex::new(r"\[腰部\]:\s*发送腰部控制目标")?;
-    let waist_response_regex =
-        Regex::new(r"\[腰部\]:\s*\[RESPONSE CALLBACK\]\s*-\s*目标已被服务端接受")?;
-    let waist_result_regex = Regex::new(r"\[腰部\]:\s*\[RESULT CALLBACK\]\s*-\s*腰部动作完成")?;
-    let waist_end_regex =
-        Regex::new(r"\[腰部\]:\s*WaistAction2?\[WaistAction2?\]\s*-\s*执行完成，结果:")?;
-
-    // 预打舵相关正则
+    // 预打舵相关正则（PrePlanNavigationNode 格式）
+    // PrePlanNavigationNode[xxx] - 开始执行
     let preplan_start_regex =
-        Regex::new(r"\[预打舵\]:\s*PrePlanNavigation\[([^\]]+)\]\s*-\s*开始执行")?;
-    let preplan_target_regex = Regex::new(
-        r"\[预打舵\]:\s*设置预打舵目标:\s*pos\(([^)]+)\),\s*ori\(([^)]+)\)\s+action:\s*(\d+)",
-    )?;
+        Regex::new(r"PrePlanNavigationNode\[([^\]]+)\]\s*-\s*开始执行")?;
+    // PrePlanNavigationNode[xxx] - 设置预规划目标:
+    //   位置: (x, y, z)
+    //   action=N, first_dir=M, rotate_mode=K
+    let preplan_pos_regex =
+        Regex::new(r"PrePlanNavigationNode\[([^\]]+)\]\s*-\s*设置预规划目标:")?;
+    let preplan_position_regex =
+        Regex::new(r"位置:\s*\(([^)]+)\)")?;
+    let preplan_action_regex =
+        Regex::new(r"action=(\d+)")?;
+    // PrePlanNavigationNode[xxx] - 服务响应: error_code=N
     let preplan_response_regex =
-        Regex::new(r"\[预打舵\]:\s*PrePlanNavigation 响应:\s*error_code=(\d+)")?;
+        Regex::new(r"PrePlanNavigationNode\[([^\]]+)\]\s*-\s*服务响应:\s*error_code=(\d+)")?;
+    // PrePlanNavigationNode[xxx] - 执行成功
+    let preplan_end_regex =
+        Regex::new(r"PrePlanNavigationNode\[([^\]]+)\]\s*-\s*执行成功")?;
+
+    // 新格式: action_type_code 提取
+    let action_code_regex = Regex::new(r"action_type_code=(\d+)")?;
+
+    // ============================================================
+    // BehaviorTree 节点格式正则（最新格式）
+    // ============================================================
+    // BehaviorTreeNode xxx: 映射 X 个输入参数到黑板
+    let bt_param_map_regex =
+        Regex::new(r"BehaviorTreeNode\s+(\w+):\s*映射\s*\d+\s*个输入参数到黑板")?;
+    // @gas_test_action_code = "2015" 提取 action_code
+    let bt_action_code_regex = Regex::new(r#"@(\w+_action_code)\s*=\s*"(\d+)""#)?;
+    // ========== BehaviorTree 节点开始 ==========
+    let bt_start_marker_regex = Regex::new(r"=+\s*BehaviorTree\s*节点开始\s*=+")?;
+    // 节点ID: normal_arm_leak_swap
+    let bt_node_id_regex = Regex::new(r"节点ID:\s*(\S+)")?;
+    // gas_test: gas_test start（预留，暂未使用）
+    // 注：Rust regex 不支持反向引用，使用简化模式
+    let _bt_test_start_regex = Regex::new(r"\w+:\s*\w+\s+start")?;
+    // gas_test: gas_test finished（预留，暂未使用）
+    let _bt_test_end_regex = Regex::new(r"\w+:\s*\w+\s+finished")?;
+    // ========== BehaviorTree 节点结束 ==========
+    let bt_end_marker_regex = Regex::new(r"=+\s*BehaviorTree\s*节点结束\s*=+")?;
+    // 结果: SUCCESS / FAILURE
+    let bt_result_regex = Regex::new(r"结果:\s*(\w+)")?;
+
+    // BehaviorTree 中间动作模块正则
+    // [ModuleName] node=ModuleName phase=start ...
+    let bt_module_start_regex =
+        Regex::new(r"\[(\w+)\]\s+node=\w+\s+phase=start")?;
+    // [ModuleName] node=ModuleName phase=end status=success cost_ms=XXX
+    let bt_module_end_regex =
+        Regex::new(r"\[(\w+)\]\s+node=\w+\s+phase=end\s+status=(\w+)\s+cost_ms=(\d+)")?;
+    // [ExecuteDoubleArmMoveAction] result received code=0 message=...
+    let bt_arm_result_regex =
+        Regex::new(r"\[ExecuteDoubleArmMoveAction\]\s+result\s+received\s+code=(\d+)")?;
+
+    // ============================================================
+    // 手臂动作子阶段正则（BehaviorTreeNode 内部）
+    // ============================================================
+    // gripper start arm=xxx open=xxx
+    let gripper_start_regex =
+        Regex::new(r"gripper start arm=(\w+) open=(\w+)")?;
+    // gripper request: cmd_code=xxx arm=xxx
+    let gripper_request_regex =
+        Regex::new(r"gripper request: cmd_code=(\d+) arm=(\w+)")?;
+    // ArmObstacle start cmd=xxx
+    let arm_obstacle_start_regex =
+        Regex::new(r"ArmObstacle start cmd=(\d+)")?;
+    // ArmObstacle done resp_status=xxx
+    let arm_obstacle_done_regex =
+        Regex::new(r"ArmObstacle done resp_status=(\d+)")?;
+    // arm_transition_point start cmd=xxx / custom start cmd=xxx
+    let arm_transition_start_regex =
+        Regex::new(r"(?:start|custom start) cmd=(\d+).*service=arm_transition_point")?;
+    // custom done resp_status=xxx
+    let arm_transition_done_regex =
+        Regex::new(r"custom done resp_status=(\d+)")?;
+    // arm_move start cmd=xxx
+    let arm_move_start_regex =
+        Regex::new(r"arm_move start cmd=(\d+)")?;
+    // arm_move response: success cmd=xxx / result code=xxx
+    let arm_move_response_regex =
+        Regex::new(r"arm_move response: (?:success cmd=(\d+)|result code=(\d+))")?;
 
     let mut flows = Vec::new();
     let mut current_flow: Option<NavigationFlow> = None;
 
-    for line in lines {
-        // 导航开始
-        if nav_start_regex.is_match(&line.line) || nav_start_alt_regex.is_match(&line.line) {
-            // 结束当前流程如果存在且未完成
-            if let Some(mut flow) = current_flow {
-                if flow.nav_end_ts.is_none() {
-                    flow.nav_end_ts = Some(line.timestamp);
-                    flow.nav_status = "incomplete".to_string();
-                }
-                flows.push(flow);
-            }
+    // 活跃的 ROS2ActionAdapter 动作（按类型跟踪）
+    // 用于新格式日志的动作跟踪
+    let mut active_adapters: std::collections::HashMap<String, ActionOperation> =
+        std::collections::HashMap::new();
 
-            // 创建新的导航流程
-            current_flow = Some(NavigationFlow {
-                nav_start_ts: Some(line.timestamp),
-                nav_end_ts: None,
-                nav_target_pos: None,
-                nav_target_ori: None,
-                nav_status: "ok".to_string(),
-                nav_sub_steps: vec![SubStep {
-                    name: "开始执行".to_string(),
-                    timestamp: line.timestamp,
-                }],
-                round_id: ts_to_round_id(line.timestamp, rounds),
-                operations: Vec::new(),
+    // 活跃的 BehaviorTree 节点
+    #[derive(Debug)]
+    struct BtNodeContext {
+        node_id: String,
+        action_code: Option<u32>,
+        start_ts: f64,
+        sub_actions: Vec<ActionOperation>,
+    }
+    let mut active_bt_node: Option<BtNodeContext> = None;
+    // 活跃的 BT 子动作（用于跟踪中间模块）
+    let mut active_bt_subaction: Option<(String, f64)> = None; // (module_name, start_ts)
+
+    for (line_idx, line) in lines.iter().enumerate() {
+        // ============================================================
+        // BehaviorTree 节点格式检测（最新格式）
+        // ============================================================
+
+        // BehaviorTreeNode 参数映射开始（预创建节点上下文）
+        if let Some(caps) = bt_param_map_regex.captures(&line.line) {
+            let node_name = caps[1].to_string();
+            // 查找后续几行的 action_code
+            let mut action_code = None;
+            for next_line in lines.iter().skip(line_idx + 1).take(3) {
+                if let Some(code_caps) = bt_action_code_regex.captures(&next_line.line) {
+                    action_code = code_caps[2].parse().ok();
+                    break;
+                }
+            }
+            active_bt_node = Some(BtNodeContext {
+                node_id: node_name,
+                action_code,
+                start_ts: line.timestamp,
+                sub_actions: Vec::new(),
             });
             continue;
         }
 
-        // 导航目标设置
-        if let Some(caps) = nav_target_regex.captures(&line.line) {
-            if let Some(ref mut flow) = current_flow
-                && flow.nav_target_pos.is_none()
-            {
-                flow.nav_target_pos = Some(caps[1].replace(' ', ""));
-                flow.nav_target_ori = Some(caps[2].replace(' ', ""));
-                flow.nav_sub_steps.push(SubStep {
-                    name: "设置导航目标".to_string(),
-                    timestamp: line.timestamp,
-                });
-            }
-            continue;
-        }
-
-        // 导航 - 发送导航目标
-        if nav_send_regex.is_match(&line.line) {
-            if let Some(ref mut flow) = current_flow {
-                flow.nav_sub_steps.push(SubStep {
-                    name: "发送导航目标".to_string(),
-                    timestamp: line.timestamp,
-                });
-            }
-            continue;
-        }
-
-        // 导航 - Response callback
-        if nav_response_regex.is_match(&line.line) {
-            if let Some(ref mut flow) = current_flow {
-                flow.nav_sub_steps.push(SubStep {
-                    name: "服务端接受".to_string(),
-                    timestamp: line.timestamp,
-                });
-            }
-            continue;
-        }
-
-        // 导航 - Result callback（不是完成的回调）
-        if nav_result_regex.is_match(&line.line) && !nav_complete_regex.is_match(&line.line) {
-            if let Some(ref mut flow) = current_flow {
-                flow.nav_sub_steps.push(SubStep {
-                    name: "结果回调".to_string(),
-                    timestamp: line.timestamp,
-                });
-            }
-            continue;
-        }
-
-        // 导航完成
-        if nav_complete_regex.is_match(&line.line) {
-            if let Some(mut flow) = current_flow.take() {
-                flow.nav_end_ts = Some(line.timestamp);
-                flow.nav_sub_steps.push(SubStep {
-                    name: "导航完成".to_string(),
-                    timestamp: line.timestamp,
-                });
-                flows.push(flow);
-            }
-            continue;
-        }
-
-        // 导航结束（旧格式兼容）
-        if nav_end_regex.is_match(&line.line) {
-            if let Some(mut flow) = current_flow.take() {
-                flow.nav_end_ts = Some(line.timestamp);
-                flow.nav_sub_steps.push(SubStep {
-                    name: "执行完成".to_string(),
-                    timestamp: line.timestamp,
-                });
-                flows.push(flow);
-            }
-            continue;
-        }
-
-        // === 机械臂动作处理 ===
-        if let Some(caps) = arm_start_regex.captures(&line.line) {
-            let action_label = caps[1].to_string();
-
-            // 查找下一行是否有action_code
-            let mut action_code = None;
-            for (idx, l) in lines.iter().enumerate() {
-                if std::ptr::eq(l, line) && idx + 1 < lines.len() {
-                    if let Some(code_caps) = arm_setgoal_regex.captures(&lines[idx + 1].line) {
-                        action_code = code_caps[1].parse().ok();
+        // BehaviorTree 节点开始标记
+        if bt_start_marker_regex.is_match(&line.line) {
+            // 查找下一行的节点ID
+            if let Some(next_line) = lines.get(line_idx + 1) {
+                if let Some(caps) = bt_node_id_regex.captures(&next_line.line) {
+                    let node_id = caps[1].to_string();
+                    // 更新已有的节点上下文或创建新的
+                    if let Some(ref mut ctx) = active_bt_node {
+                        if ctx.node_id != node_id {
+                            ctx.node_id = node_id;
+                        }
+                        ctx.start_ts = line.timestamp;
+                    } else {
+                        active_bt_node = Some(BtNodeContext {
+                            node_id,
+                            action_code: None,
+                            start_ts: line.timestamp,
+                            sub_actions: Vec::new(),
+                        });
                     }
+                }
+            }
+            continue;
+        }
+
+        // BehaviorTree 中间模块开始
+        if let Some(caps) = bt_module_start_regex.captures(&line.line) {
+            let module_name = caps[1].to_string();
+            active_bt_subaction = Some((module_name, line.timestamp));
+            continue;
+        }
+
+        // BehaviorTree 中间模块结束
+        if let Some(caps) = bt_module_end_regex.captures(&line.line) {
+            let module_name = caps[1].to_string();
+            let status = caps[2].to_string();
+            let cost_ms: u32 = caps[3].parse().unwrap_or(0);
+
+            // 如果有活跃的 BT 节点，添加子动作
+            if let Some(ref mut ctx) = active_bt_node {
+                let start_ts = active_bt_subaction
+                    .as_ref()
+                    .filter(|(name, _)| *name == module_name)
+                    .map(|(_, ts)| *ts)
+                    .unwrap_or(line.timestamp - (cost_ms as f64 / 1000.0));
+
+                let sub_action = ActionOperation {
+                    action_type: "bt_module".to_string(),
+                    action_code: None,
+                    label: module_name.clone(),
+                    start_ts: Some(start_ts),
+                    end_ts: Some(line.timestamp),
+                    status: status.clone(),
+                    sub_steps: vec![
+                        SubStep {
+                            name: "开始".to_string(),
+                            timestamp: start_ts,
+                        },
+                        SubStep {
+                            name: format!("完成({}ms)", cost_ms),
+                            timestamp: line.timestamp,
+                        },
+                    ],
+                };
+                ctx.sub_actions.push(sub_action);
+            }
+            active_bt_subaction = None;
+            continue;
+        }
+
+        // BehaviorTree 双臂结果（特殊处理）
+        if let Some(caps) = bt_arm_result_regex.captures(&line.line) {
+            let code = caps[1].trim();
+            if let Some(ref mut ctx) = active_bt_node {
+                // 为最后一个 ExecuteDoubleArmMoveAction 添加结果
+                for action in ctx.sub_actions.iter_mut().rev() {
+                    if action.label.contains("ExecuteDoubleArmMoveAction") {
+                        action.sub_steps.push(SubStep {
+                            name: format!("结果(code={})", code),
+                            timestamp: line.timestamp,
+                        });
+                        break;
+                    }
+                }
+            }
+            continue;
+        }
+
+        // ============================================================
+        // 手臂动作子阶段检测（BehaviorTreeNode 内部）
+        // ============================================================
+
+        // gripper 开始
+        if let Some(caps) = gripper_start_regex.captures(&line.line) {
+            let arm = caps[1].to_string();
+            let open = caps[2].to_string();
+            if let Some(ref mut ctx) = active_bt_node {
+                ctx.sub_actions.push(ActionOperation {
+                    action_type: "gripper".to_string(),
+                    action_code: None,
+                    label: format!("gripper({},{})", arm, open),
+                    start_ts: Some(line.timestamp),
+                    end_ts: None,
+                    status: "pending".to_string(),
+                    sub_steps: vec![SubStep {
+                        name: format!("gripper start arm={} open={}", arm, open),
+                        timestamp: line.timestamp,
+                    }],
+                });
+            }
+            continue;
+        }
+
+        // gripper 请求
+        if let Some(caps) = gripper_request_regex.captures(&line.line) {
+            let cmd = caps[1].to_string();
+            let arm = caps[2].to_string();
+            if let Some(ref mut ctx) = active_bt_node {
+                // 为最近的 gripper 动作添加子步骤
+                for action in ctx.sub_actions.iter_mut().rev() {
+                    if action.action_type == "gripper" && action.end_ts.is_none() {
+                        action.sub_steps.push(SubStep {
+                            name: format!("gripper request cmd={} arm={}", cmd, arm),
+                            timestamp: line.timestamp,
+                        });
+                        action.end_ts = Some(line.timestamp);
+                        action.status = "ok".to_string();
+                        break;
+                    }
+                }
+            }
+            continue;
+        }
+
+        // ArmObstacle 开始
+        if let Some(caps) = arm_obstacle_start_regex.captures(&line.line) {
+            let cmd = caps[1].to_string();
+            if let Some(ref mut ctx) = active_bt_node {
+                ctx.sub_actions.push(ActionOperation {
+                    action_type: "obstacle".to_string(),
+                    action_code: cmd.parse().ok(),
+                    label: format!("ArmObstacle({})", cmd),
+                    start_ts: Some(line.timestamp),
+                    end_ts: None,
+                    status: "pending".to_string(),
+                    sub_steps: vec![SubStep {
+                        name: format!("ArmObstacle start cmd={}", cmd),
+                        timestamp: line.timestamp,
+                    }],
+                });
+            }
+            continue;
+        }
+
+        // ArmObstacle 完成
+        if let Some(caps) = arm_obstacle_done_regex.captures(&line.line) {
+            let status = caps[1].to_string();
+            if let Some(ref mut ctx) = active_bt_node {
+                for action in ctx.sub_actions.iter_mut().rev() {
+                    if action.action_type == "obstacle" && action.end_ts.is_none() {
+                        action.sub_steps.push(SubStep {
+                            name: format!("ArmObstacle done status={}", status),
+                            timestamp: line.timestamp,
+                        });
+                        action.end_ts = Some(line.timestamp);
+                        action.status = if status == "0" { "ok".to_string() } else { format!("status_{}", status) };
+                        break;
+                    }
+                }
+            }
+            continue;
+        }
+
+        // arm_transition_point 开始
+        if let Some(caps) = arm_transition_start_regex.captures(&line.line) {
+            let cmd = caps[1].to_string();
+            if let Some(ref mut ctx) = active_bt_node {
+                ctx.sub_actions.push(ActionOperation {
+                    action_type: "transition".to_string(),
+                    action_code: cmd.parse().ok(),
+                    label: format!("transition({})", cmd),
+                    start_ts: Some(line.timestamp),
+                    end_ts: None,
+                    status: "pending".to_string(),
+                    sub_steps: vec![SubStep {
+                        name: format!("transition start cmd={}", cmd),
+                        timestamp: line.timestamp,
+                    }],
+                });
+            }
+            continue;
+        }
+
+        // arm_transition_point 完成
+        if let Some(caps) = arm_transition_done_regex.captures(&line.line) {
+            let status = caps[1].to_string();
+            if let Some(ref mut ctx) = active_bt_node {
+                for action in ctx.sub_actions.iter_mut().rev() {
+                    if action.action_type == "transition" && action.end_ts.is_none() {
+                        action.sub_steps.push(SubStep {
+                            name: format!("transition done status={}", status),
+                            timestamp: line.timestamp,
+                        });
+                        action.end_ts = Some(line.timestamp);
+                        action.status = if status == "0" { "ok".to_string() } else { format!("status_{}", status) };
+                        break;
+                    }
+                }
+            }
+            continue;
+        }
+
+        // arm_move 开始
+        if let Some(caps) = arm_move_start_regex.captures(&line.line) {
+            let cmd = caps[1].to_string();
+            if let Some(ref mut ctx) = active_bt_node {
+                ctx.sub_actions.push(ActionOperation {
+                    action_type: "arm_move".to_string(),
+                    action_code: cmd.parse().ok(),
+                    label: format!("arm_move({})", cmd),
+                    start_ts: Some(line.timestamp),
+                    end_ts: None,
+                    status: "pending".to_string(),
+                    sub_steps: vec![SubStep {
+                        name: format!("arm_move start cmd={}", cmd),
+                        timestamp: line.timestamp,
+                    }],
+                });
+            }
+            continue;
+        }
+
+        // arm_move 响应
+        if arm_move_response_regex.is_match(&line.line) {
+            if let Some(ref mut ctx) = active_bt_node {
+                for action in ctx.sub_actions.iter_mut().rev() {
+                    if action.action_type == "arm_move" && action.end_ts.is_none() {
+                        action.sub_steps.push(SubStep {
+                            name: "arm_move response".to_string(),
+                            timestamp: line.timestamp,
+                        });
+                        action.end_ts = Some(line.timestamp);
+                        action.status = "ok".to_string();
+                        break;
+                    }
+                }
+            }
+            continue;
+        }
+
+        // BehaviorTree 节点结束标记
+        if bt_end_marker_regex.is_match(&line.line) {
+            // 查找后续几行的节点ID和结果
+            let mut result_status = "unknown".to_string();
+            for next_line in lines.iter().skip(line_idx + 1).take(3) {
+                if let Some(caps) = bt_result_regex.captures(&next_line.line) {
+                    result_status = caps[1].to_string();
                     break;
                 }
             }
 
-            let arm_action = ActionOperation {
-                action_type: "arm".to_string(),
-                action_code,
-                label: action_label.clone(),
-                start_ts: Some(line.timestamp),
-                end_ts: None,
-                status: "pending".to_string(),
-                sub_steps: vec![SubStep {
-                    name: format!("开始执行[{}]", action_label),
-                    timestamp: line.timestamp,
-                }],
-            };
+            // 完成 BT 节点，创建动作操作
+            if let Some(ctx) = active_bt_node.take() {
+                let round_id = ts_to_round_id(ctx.start_ts, rounds);
+                let label = if let Some(code) = ctx.action_code {
+                    format!("{}({})", ctx.node_id, code)
+                } else {
+                    ctx.node_id.clone()
+                };
 
-            if let Some(ref mut flow) = current_flow {
-                flow.operations.push(arm_action);
-            } else if let Some(flow) = flows.last_mut() {
-                flow.operations.push(arm_action);
+                // 创建主动作（包含所有子动作作为子步骤）
+                let mut sub_steps = vec![SubStep {
+                    name: "节点开始".to_string(),
+                    timestamp: ctx.start_ts,
+                }];
+
+                // 将子动作转换为子步骤
+                for sub_action in &ctx.sub_actions {
+                    if let Some(start) = sub_action.start_ts {
+                        sub_steps.push(SubStep {
+                            name: format!("{} 开始", sub_action.label),
+                            timestamp: start,
+                        });
+                    }
+                    if let Some(end) = sub_action.end_ts {
+                        sub_steps.push(SubStep {
+                            name: format!("{} 完成", sub_action.label),
+                            timestamp: end,
+                        });
+                    }
+                }
+
+                sub_steps.push(SubStep {
+                    name: format!("节点结束({})", result_status),
+                    timestamp: line.timestamp,
+                });
+
+                let bt_action = ActionOperation {
+                    action_type: "arm".to_string(), // 归类为 arm 类型以便甘特图显示
+                    action_code: ctx.action_code,
+                    label,
+                    start_ts: Some(ctx.start_ts),
+                    end_ts: Some(line.timestamp),
+                    status: if result_status == "SUCCESS" {
+                        "ok".to_string()
+                    } else {
+                        format!("failed_{}", result_status)
+                    },
+                    sub_steps,
+                };
+
+                // 添加到流程中
+                if current_flow.is_none()
+                    || current_flow.as_ref().map(|f| f.round_id) != Some(round_id)
+                {
+                    // 保存当前流程
+                    if let Some(flow) = current_flow.take() {
+                        flows.push(flow);
+                    }
+
+                    // 创建新流程
+                    current_flow = Some(NavigationFlow {
+                        nav_start_ts: None,
+                        nav_end_ts: None,
+                        nav_target_pos: None,
+                        nav_target_ori: None,
+                        nav_status: "ok".to_string(),
+                        nav_sub_steps: Vec::new(),
+                        round_id,
+                        operations: vec![bt_action],
+                    });
+                } else if let Some(ref mut flow) = current_flow {
+                    flow.operations.push(bt_action);
+                }
             }
             continue;
         }
 
-        // 机械臂 - 发送目标
-        if arm_send_regex.is_match(&line.line) {
-            add_arm_substep(&mut current_flow, &mut flows, "发送目标", line.timestamp);
+        // ============================================================
+        // 新格式检测（ROS2ActionAdapter）
+        // ============================================================
+
+        // ROS2ActionAdapter 开始
+        if let Some(caps) = adapter_start_regex.captures(&line.line) {
+            let adapter_type = caps[1].to_string();
+
+            // 将 adapter_type 映射到 action_type
+            let action_type = match adapter_type.as_str() {
+                "navigation" => "navigation",
+                "double_arm" => "arm",
+                "waist_control" => "waist",
+                "head_control" => "head",
+                _ => &adapter_type,
+            };
+
+            // 查找后续几行的 action_type_code（如果有）
+            let mut action_code = None;
+            for next_line in lines.iter().skip(line_idx + 1).take(5) {
+                if let Some(code_caps) = action_code_regex.captures(&next_line.line) {
+                    action_code = code_caps[1].parse().ok();
+                    break;
+                }
+            }
+
+            let label = match action_type {
+                "navigation" => "导航".to_string(),
+                "arm" => {
+                    if let Some(code) = action_code {
+                        format!("双臂({})", code)
+                    } else {
+                        "双臂".to_string()
+                    }
+                }
+                "waist" => "腰部".to_string(),
+                "head" => "头部".to_string(),
+                _ => adapter_type.clone(),
+            };
+
+            let action = ActionOperation {
+                action_type: action_type.to_string(),
+                action_code,
+                label,
+                start_ts: Some(line.timestamp),
+                end_ts: None,
+                status: "pending".to_string(),
+                sub_steps: vec![SubStep {
+                    name: "开始执行".to_string(),
+                    timestamp: line.timestamp,
+                }],
+            };
+
+            // 使用组合键：adapter_type + timestamp 以支持同类型的并发动作
+            let key = format!("{}_{}", adapter_type, line.timestamp as u64);
+            active_adapters.insert(key, action);
             continue;
         }
 
-        // 机械臂 - Response callback
-        if arm_response_regex.is_match(&line.line) {
-            add_arm_substep(&mut current_flow, &mut flows, "服务端接受", line.timestamp);
+        // ROS2ActionAdapter 等待服务器
+        if let Some(caps) = adapter_wait_regex.captures(&line.line) {
+            let adapter_type = caps[1].to_string();
+            let server_name = caps[2].to_string();
+            // 找最近开始的匹配类型的未完成动作
+            if let Some((_, action)) = active_adapters
+                .iter_mut()
+                .filter(|(k, a)| k.starts_with(&adapter_type) && a.end_ts.is_none())
+                .max_by(|(_, a1), (_, a2)| {
+                    a1.start_ts.partial_cmp(&a2.start_ts).unwrap()
+                })
+            {
+                action.sub_steps.push(SubStep {
+                    name: format!("等待服务器 '{}'...", server_name),
+                    timestamp: line.timestamp,
+                });
+            }
             continue;
         }
 
-        // 机械臂动作完成 - [RESULT CALLBACK]
-        if let Some(caps) = arm_result_regex.captures(&line.line) {
-            let status = caps[1].trim();
-            finish_arm_action(&mut current_flow, &mut flows, status, line.timestamp);
+        // ROS2ActionAdapter 服务器已就绪
+        if let Some(caps) = adapter_ready_regex.captures(&line.line) {
+            let adapter_type = caps[1].to_string();
+            if let Some((_, action)) = active_adapters
+                .iter_mut()
+                .filter(|(k, a)| k.starts_with(&adapter_type) && a.end_ts.is_none())
+                .max_by(|(_, a1), (_, a2)| {
+                    a1.start_ts.partial_cmp(&a2.start_ts).unwrap()
+                })
+            {
+                action.sub_steps.push(SubStep {
+                    name: "服务器已就绪".to_string(),
+                    timestamp: line.timestamp,
+                });
+            }
             continue;
         }
 
-        // 机械臂动作完成 - 执行完成
-        if arm_complete_regex.is_match(&line.line) {
-            add_arm_complete_substep(&mut current_flow, &mut flows, line.timestamp);
+        // ROS2ActionAdapter 发送目标
+        if let Some(caps) = adapter_send_regex.captures(&line.line) {
+            let adapter_type = caps[1].to_string();
+            if let Some((_, action)) = active_adapters
+                .iter_mut()
+                .filter(|(k, a)| k.starts_with(&adapter_type) && a.end_ts.is_none())
+                .max_by(|(_, a1), (_, a2)| {
+                    a1.start_ts.partial_cmp(&a2.start_ts).unwrap()
+                })
+            {
+                action.sub_steps.push(SubStep {
+                    name: "发送目标".to_string(),
+                    timestamp: line.timestamp,
+                });
+            }
             continue;
         }
 
-        // === 头部控制处理 ===
-        if head_start_regex.is_match(&line.line) {
-            let head_action = create_action("head", "头部控制", line.timestamp);
-            add_action_to_flow(&mut current_flow, &mut flows, head_action);
+        // ROS2ActionAdapter 响应（目标被接受，开始执行）
+        if let Some(caps) = adapter_response_regex.captures(&line.line) {
+            let adapter_type = caps[1].to_string();
+            // 找匹配类型的最近开始的未完成动作
+            if let Some((_, action)) = active_adapters
+                .iter_mut()
+                .filter(|(k, a)| k.starts_with(&adapter_type) && a.end_ts.is_none())
+                .max_by(|(_, a1), (_, a2)| {
+                    a1.start_ts.partial_cmp(&a2.start_ts).unwrap()
+                })
+            {
+                action.sub_steps.push(SubStep {
+                    name: "执行中".to_string(),
+                    timestamp: line.timestamp,
+                });
+            }
             continue;
         }
 
-        if head_send_regex.is_match(&line.line) {
-            add_action_substep(
-                &mut current_flow,
-                &mut flows,
-                "head",
-                "发送目标",
-                line.timestamp,
-            );
+        // ROS2ActionAdapter 结果
+        if let Some(caps) = adapter_result_regex.captures(&line.line) {
+            let adapter_type = caps[1].to_string();
+            let success = caps[2].to_string();
+            // 找匹配类型的最近开始的未完成动作
+            if let Some((_, action)) = active_adapters
+                .iter_mut()
+                .filter(|(k, a)| k.starts_with(&adapter_type) && a.end_ts.is_none())
+                .max_by(|(_, a1), (_, a2)| {
+                    a1.start_ts.partial_cmp(&a2.start_ts).unwrap()
+                })
+            {
+                action.sub_steps.push(SubStep {
+                    name: format!("[RESULT] 完成，成功: {}", success),
+                    timestamp: line.timestamp,
+                });
+            }
             continue;
         }
 
-        if head_response_regex.is_match(&line.line) {
-            add_action_substep(
-                &mut current_flow,
-                &mut flows,
-                "head",
-                "服务端接受",
-                line.timestamp,
-            );
+        // ROS2ActionAdapter 结束
+        if let Some(caps) = adapter_end_regex.captures(&line.line) {
+            let adapter_type = caps[1].to_string();
+            let result = caps[2].to_string();
+
+            // 查找并完成匹配类型的最早未完成动作
+            let mut completed_key = None;
+            for (key, action) in active_adapters.iter_mut() {
+                if key.starts_with(&adapter_type) && action.end_ts.is_none() {
+                    action.end_ts = Some(line.timestamp);
+                    action.status = if result == "成功" {
+                        "ok".to_string()
+                    } else {
+                        format!("failed_{}", result)
+                    };
+                    action.sub_steps.push(SubStep {
+                        name: format!("执行完成，结果: {}", result),
+                        timestamp: line.timestamp,
+                    });
+                    completed_key = Some(key.clone());
+                    break;
+                }
+            }
+
+            // 将完成的动作添加到当前流程或创建新流程
+            if let Some(key) = completed_key {
+                if let Some(action) = active_adapters.remove(&key) {
+                    let round_id = ts_to_round_id(action.start_ts.unwrap_or(line.timestamp), rounds);
+
+                    // 如果当前没有流程或轮次不同，创建新流程
+                    if current_flow.is_none()
+                        || current_flow.as_ref().map(|f| f.round_id) != Some(round_id)
+                    {
+                        // 保存当前流程
+                        if let Some(flow) = current_flow.take() {
+                            flows.push(flow);
+                        }
+
+                        // 创建新流程
+                        // 如果第一个动作是导航，设置 nav_start_ts/nav_end_ts
+                        let (nav_start, nav_end, nav_sub_steps) = if action.action_type == "navigation" {
+                            (action.start_ts, action.end_ts, action.sub_steps.clone())
+                        } else {
+                            (None, None, Vec::new())
+                        };
+                        current_flow = Some(NavigationFlow {
+                            nav_start_ts: nav_start,
+                            nav_end_ts: nav_end,
+                            nav_target_pos: None,
+                            nav_target_ori: None,
+                            nav_status: "ok".to_string(),
+                            nav_sub_steps,
+                            round_id,
+                            operations: vec![action],
+                        });
+                    } else {
+                        // 添加到当前流程
+                        if let Some(ref mut flow) = current_flow {
+                            // 如果是导航动作，更新导航信息
+                            if action.action_type == "navigation" {
+                                flow.nav_start_ts = action.start_ts;
+                                flow.nav_end_ts = action.end_ts;
+                                flow.nav_sub_steps = action.sub_steps.clone();
+                            }
+                            flow.operations.push(action);
+                        }
+                    }
+                }
+            }
             continue;
         }
 
-        if head_result_regex.is_match(&line.line) {
-            add_action_substep(
-                &mut current_flow,
-                &mut flows,
-                "head",
-                "动作完成",
-                line.timestamp,
-            );
-            continue;
-        }
-
-        if head_end_regex.is_match(&line.line) {
-            finish_action(&mut current_flow, &mut flows, "head", line.timestamp);
-            continue;
-        }
-
-        // === 腰部控制处理 ===
-        if waist_start_regex.is_match(&line.line) {
-            let waist_action = create_action("waist", "腰部控制", line.timestamp);
-            add_action_to_flow(&mut current_flow, &mut flows, waist_action);
-            continue;
-        }
-
-        if waist_send_regex.is_match(&line.line) {
-            add_action_substep(
-                &mut current_flow,
-                &mut flows,
-                "waist",
-                "发送目标",
-                line.timestamp,
-            );
-            continue;
-        }
-
-        if waist_response_regex.is_match(&line.line) {
-            add_action_substep(
-                &mut current_flow,
-                &mut flows,
-                "waist",
-                "服务端接受",
-                line.timestamp,
-            );
-            continue;
-        }
-
-        if waist_result_regex.is_match(&line.line) {
-            add_action_substep(
-                &mut current_flow,
-                &mut flows,
-                "waist",
-                "动作完成",
-                line.timestamp,
-            );
-            continue;
-        }
-
-        if waist_end_regex.is_match(&line.line) {
-            finish_action(&mut current_flow, &mut flows, "waist", line.timestamp);
-            continue;
-        }
-
-        // === 预打舵处理 ===
+        // === 预打舵处理（PrePlanNavigationNode 格式）===
         if let Some(caps) = preplan_start_regex.captures(&line.line) {
             let action_label = caps[1].to_string();
             let preplan_action = ActionOperation {
@@ -353,22 +778,56 @@ pub fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<Navigatio
                     timestamp: line.timestamp,
                 }],
             };
-            add_action_to_flow(&mut current_flow, &mut flows, preplan_action);
+
+            // 确保有流程可以添加动作
+            let round_id = ts_to_round_id(line.timestamp, rounds);
+            if current_flow.is_none()
+                || current_flow.as_ref().map(|f| f.round_id) != Some(round_id)
+            {
+                // 保存当前流程
+                if let Some(flow) = current_flow.take() {
+                    flows.push(flow);
+                }
+                // 创建新流程
+                current_flow = Some(NavigationFlow {
+                    nav_start_ts: None,
+                    nav_end_ts: None,
+                    nav_target_pos: None,
+                    nav_target_ori: None,
+                    nav_status: "ok".to_string(),
+                    nav_sub_steps: Vec::new(),
+                    round_id,
+                    operations: vec![preplan_action],
+                });
+            } else if let Some(ref mut flow) = current_flow {
+                flow.operations.push(preplan_action);
+            }
             continue;
         }
 
-        if let Some(caps) = preplan_target_regex.captures(&line.line) {
-            let pos = caps[1].replace(' ', "");
-            let _ori = caps[2].replace(' ', "");
-            let action_code: u32 = caps[3].parse().unwrap_or(0);
+        // 设置预规划目标
+        if preplan_pos_regex.is_match(&line.line) {
+            // 查找后续几行的位置和action信息
+            let mut pos_str = String::new();
+            let mut action_code_val: Option<u32> = None;
+            for next_line in lines.iter().skip(line_idx + 1).take(5) {
+                if let Some(pos_caps) = preplan_position_regex.captures(&next_line.line) {
+                    pos_str = pos_caps[1].replace(' ', "");
+                }
+                if let Some(action_caps) = preplan_action_regex.captures(&next_line.line) {
+                    action_code_val = action_caps[1].parse().ok();
+                }
+            }
 
-            // 更新最近的预打舵动作的 action_code 和添加子步骤
+            // 更新最近的预打舵动作
             if let Some(flow) = current_flow.as_mut() {
                 for op in flow.operations.iter_mut().rev() {
                     if op.action_type == "preplan" && op.end_ts.is_none() {
-                        op.action_code = Some(action_code);
+                        if let Some(code) = action_code_val {
+                            op.action_code = Some(code);
+                        }
                         op.sub_steps.push(SubStep {
-                            name: format!("设置目标→{}", pos),
+                            name: format!("设置目标→{}", pos_str),
                             timestamp: line.timestamp,
                         });
                         break;
@@ -377,9 +836,11 @@ pub fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<Navigatio
             } else if let Some(flow) = flows.last_mut() {
                 for op in flow.operations.iter_mut().rev() {
                     if op.action_type == "preplan" && op.end_ts.is_none() {
-                        op.action_code = Some(action_code);
+                        if let Some(code) = action_code_val {
+                            op.action_code = Some(code);
+                        }
                         op.sub_steps.push(SubStep {
-                            name: format!("设置目标→{}", pos),
+                            name: format!("设置目标→{}", pos_str),
                             timestamp: line.timestamp,
                         });
                         break;
@@ -389,9 +850,10 @@ pub fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<Navigatio
             continue;
         }
 
+        // 服务响应
         if let Some(caps) = preplan_response_regex.captures(&line.line) {
-            let error_code = caps[1].trim();
-            // 预打舵响应即为完成（它是异步请求，不等待结果）
+            let error_code = caps[2].trim();
+            // 添加响应子步骤（不结束动作，等待执行成功）
             if let Some(flow) = current_flow.as_mut() {
                 for op in flow.operations.iter_mut().rev() {
                     if op.action_type == "preplan" && op.end_ts.is_none() {
@@ -399,12 +861,6 @@ pub fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<Navigatio
                             name: format!("响应(code={})", error_code),
                             timestamp: line.timestamp,
                         });
-                        op.end_ts = Some(line.timestamp);
-                        op.status = if error_code == "10" {
-                            "ok".to_string()
-                        } else {
-                            format!("error_{}", error_code)
-                        };
                         break;
                     }
                 }
@@ -415,12 +871,37 @@ pub fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<Navigatio
                             name: format!("响应(code={})", error_code),
                             timestamp: line.timestamp,
                         });
+                        break;
+                    }
+                }
+            }
+            continue;
+        }
+
+        // 执行成功
+        if preplan_end_regex.is_match(&line.line) {
+            // 完成预打舵动作
+            if let Some(flow) = current_flow.as_mut() {
+                for op in flow.operations.iter_mut().rev() {
+                    if op.action_type == "preplan" && op.end_ts.is_none() {
+                        op.sub_steps.push(SubStep {
+                            name: "执行成功".to_string(),
+                            timestamp: line.timestamp,
+                        });
                         op.end_ts = Some(line.timestamp);
-                        op.status = if error_code == "10" {
-                            "ok".to_string()
-                        } else {
-                            format!("error_{}", error_code)
-                        };
+                        op.status = "ok".to_string();
+                        break;
+                    }
+                }
+            } else if let Some(flow) = flows.last_mut() {
+                for op in flow.operations.iter_mut().rev() {
+                    if op.action_type == "preplan" && op.end_ts.is_none() {
+                        op.sub_steps.push(SubStep {
+                            name: "执行成功".to_string(),
+                            timestamp: line.timestamp,
+                        });
+                        op.end_ts = Some(line.timestamp);
+                        op.status = "ok".to_string();
                         break;
                     }
                 }
@@ -435,214 +916,35 @@ pub fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<Navigatio
         flows.push(flow);
     }
 
+    // 处理未完成的 ROS2ActionAdapter 动作
+    for (_, action) in active_adapters {
+        if action.end_ts.is_none() {
+            let round_id = ts_to_round_id(action.start_ts.unwrap_or(0.0), rounds);
+            // 查找匹配轮次的流程并添加
+            let mut found = false;
+            for flow in flows.iter_mut() {
+                if flow.round_id == round_id {
+                    flow.operations.push(action.clone());
+                    found = true;
+                    break;
+                }
+            }
+            if !found {
+                // 创建新流程
+                flows.push(NavigationFlow {
+                    nav_start_ts: None,
+                    nav_end_ts: None,
+                    nav_target_pos: None,
+                    nav_target_ori: None,
+                    nav_status: "incomplete".to_string(),
+                    nav_sub_steps: Vec::new(),
+                    round_id,
+                    operations: vec![action],
+                });
+            }
+        }
+    }
+
     Ok(flows)
 }
 
-// === 辅助函数 ===
-
-/// 创建一个动作操作
-fn create_action(action_type: &str, label: &str, timestamp: f64) -> ActionOperation {
-    ActionOperation {
-        action_type: action_type.to_string(),
-        action_code: None,
-        label: label.to_string(),
-        start_ts: Some(timestamp),
-        end_ts: None,
-        status: "pending".to_string(),
-        sub_steps: vec![SubStep {
-            name: "开始执行".to_string(),
-            timestamp,
-        }],
-    }
-}
-
-/// 将动作添加到流程中
-fn add_action_to_flow(
-    current_flow: &mut Option<NavigationFlow>,
-    flows: &mut Vec<NavigationFlow>,
-    action: ActionOperation,
-) {
-    if let Some(flow) = current_flow {
-        flow.operations.push(action);
-    } else if let Some(flow) = flows.last_mut() {
-        flow.operations.push(action);
-    }
-}
-
-/// 为机械臂动作添加子步骤
-fn add_arm_substep(
-    current_flow: &mut Option<NavigationFlow>,
-    flows: &mut Vec<NavigationFlow>,
-    step_name: &str,
-    timestamp: f64,
-) {
-    if let Some(flow) = current_flow {
-        for op in flow.operations.iter_mut().rev() {
-            if op.action_type == "arm" && op.end_ts.is_none() {
-                op.sub_steps.push(SubStep {
-                    name: step_name.to_string(),
-                    timestamp,
-                });
-                break;
-            }
-        }
-    } else if let Some(flow) = flows.last_mut() {
-        for op in flow.operations.iter_mut().rev() {
-            if op.action_type == "arm" && op.end_ts.is_none() {
-                op.sub_steps.push(SubStep {
-                    name: step_name.to_string(),
-                    timestamp,
-                });
-                break;
-            }
-        }
-    }
-}
-
-/// 完成机械臂动作
-fn finish_arm_action(
-    current_flow: &mut Option<NavigationFlow>,
-    flows: &mut Vec<NavigationFlow>,
-    status: &str,
-    timestamp: f64,
-) {
-    let mut found = false;
-    if let Some(flow) = current_flow {
-        for op in flow.operations.iter_mut().rev() {
-            if op.action_type == "arm" && op.end_ts.is_none() {
-                op.sub_steps.push(SubStep {
-                    name: format!("动作完成(状态:{})", status),
-                    timestamp,
-                });
-                op.end_ts = Some(timestamp);
-                op.status = if status == "0" {
-                    "ok".to_string()
-                } else {
-                    format!("status_{}", status)
-                };
-                found = true;
-                break;
-            }
-        }
-    }
-
-    if !found {
-        for flow in flows.iter_mut().rev() {
-            for op in flow.operations.iter_mut().rev() {
-                if op.action_type == "arm" && op.end_ts.is_none() {
-                    op.sub_steps.push(SubStep {
-                        name: format!("动作完成(状态:{})", status),
-                        timestamp,
-                    });
-                    op.end_ts = Some(timestamp);
-                    op.status = if status == "0" {
-                        "ok".to_string()
-                    } else {
-                        format!("status_{}", status)
-                    };
-                    break;
-                }
-            }
-        }
-    }
-}
-
-/// 为机械臂动作添加完成子步骤
-fn add_arm_complete_substep(
-    current_flow: &mut Option<NavigationFlow>,
-    flows: &mut Vec<NavigationFlow>,
-    timestamp: f64,
-) {
-    let mut found = false;
-    if let Some(flow) = current_flow {
-        for op in flow.operations.iter_mut().rev() {
-            if op.action_type == "arm" {
-                op.sub_steps.push(SubStep {
-                    name: "执行完成".to_string(),
-                    timestamp,
-                });
-                found = true;
-                break;
-            }
-        }
-    }
-
-    if !found {
-        for flow in flows.iter_mut().rev() {
-            for op in flow.operations.iter_mut().rev() {
-                if op.action_type == "arm" {
-                    op.sub_steps.push(SubStep {
-                        name: "执行完成".to_string(),
-                        timestamp,
-                    });
-                    break;
-                }
-            }
-        }
-    }
-}
-
-/// 为指定类型的动作添加子步骤
-fn add_action_substep(
-    current_flow: &mut Option<NavigationFlow>,
-    flows: &mut Vec<NavigationFlow>,
-    action_type: &str,
-    step_name: &str,
-    timestamp: f64,
-) {
-    if let Some(flow) = current_flow {
-        for op in flow.operations.iter_mut().rev() {
-            if op.action_type == action_type && op.end_ts.is_none() {
-                op.sub_steps.push(SubStep {
-                    name: step_name.to_string(),
-                    timestamp,
-                });
-                break;
-            }
-        }
-    } else if let Some(flow) = flows.last_mut() {
-        for op in flow.operations.iter_mut().rev() {
-            if op.action_type == action_type && op.end_ts.is_none() {
-                op.sub_steps.push(SubStep {
-                    name: step_name.to_string(),
-                    timestamp,
-                });
-                break;
-            }
-        }
-    }
-}
-
-/// 完成指定类型的动作
-fn finish_action(
-    current_flow: &mut Option<NavigationFlow>,
-    flows: &mut Vec<NavigationFlow>,
-    action_type: &str,
-    timestamp: f64,
-) {
-    if let Some(flow) = current_flow {
-        for op in flow.operations.iter_mut().rev() {
-            if op.action_type == action_type && op.end_ts.is_none() {
-                op.sub_steps.push(SubStep {
-                    name: "执行完成".to_string(),
-                    timestamp,
-                });
-                op.end_ts = Some(timestamp);
-                op.status = "ok".to_string();
-                break;
-            }
-        }
-    } else if let Some(flow) = flows.last_mut() {
-        for op in flow.operations.iter_mut().rev() {
-            if op.action_type == action_type && op.end_ts.is_none() {
-                op.sub_steps.push(SubStep {
-                    name: "执行完成".to_string(),
-                    timestamp,
-                });
-                op.end_ts = Some(timestamp);
-                op.status = "ok".to_string();
-                break;
-            }
-        }
-    }
-}

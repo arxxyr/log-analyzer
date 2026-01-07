@@ -125,6 +125,48 @@ impl WorkflowOrchestrator {
         })
     }
 
+    /// 解析分析器使用的远程日志目录
+    /// 1. 如果分析器配置了 remote_log_dir，使用它
+    /// 2. 否则使用全局 remote.log_dir
+    /// 3. 如果 use_latest_date_dir 为 true，查找最新日期子目录
+    fn resolve_log_dir_for_analyzer(
+        &mut self,
+        analyzer_log_dir: Option<&PathBuf>,
+        use_latest_date_dir: bool,
+    ) -> Result<String> {
+        // 确定基础目录
+        let base_dir = analyzer_log_dir
+            .and_then(|p| p.to_str())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| {
+                self.config
+                    .remote
+                    .log_dir
+                    .to_str()
+                    .unwrap_or("")
+                    .to_string()
+            });
+
+        // 如果需要查找最新日期子目录
+        if use_latest_date_dir && self.remote_connection.is_some() {
+            let connection = self.remote_connection.as_mut().unwrap();
+            match connection.find_latest_date_dir(&base_dir) {
+                Ok(Some(date_dir)) => {
+                    info!("使用日期子目录: {}", date_dir);
+                    return Ok(date_dir);
+                }
+                Ok(None) => {
+                    warn!("未找到日期子目录，使用基础目录: {}", base_dir);
+                }
+                Err(e) => {
+                    warn!("查找日期子目录失败: {}，使用基础目录: {}", e, base_dir);
+                }
+            }
+        }
+
+        Ok(base_dir)
+    }
+
     /// 自动模式：获取最新日志并分析
     pub fn run_auto(&mut self) -> Result<WorkflowResult> {
         // 检查是否启用了多文件分析
@@ -205,11 +247,17 @@ impl WorkflowOrchestrator {
             });
 
             // 查找对应的分析器配置，提取需要的值（避免借用冲突）
-            let (is_enabled, is_required, is_primary) = {
+            let (is_enabled, is_required, is_primary, remote_log_dir, use_latest_date_dir) = {
                 let analyzer_config = self.config.analyzers.iter().find(|a| a.pattern == *pattern);
                 match analyzer_config {
-                    Some(ac) => (ac.enabled, ac.required, ac.is_primary),
-                    None => (true, false, false), // 未配置的模式默认启用、非必需、非主时间轴
+                    Some(ac) => (
+                        ac.enabled,
+                        ac.required,
+                        ac.is_primary,
+                        ac.remote_log_dir.clone(),
+                        ac.use_latest_date_dir,
+                    ),
+                    None => (true, false, false, None, false), // 未配置的模式默认启用、非必需、非主时间轴
                 }
             };
 
@@ -219,13 +267,19 @@ impl WorkflowOrchestrator {
                 continue;
             }
 
+            // 确定该分析器使用的远程日志目录
+            let effective_log_dir = self.resolve_log_dir_for_analyzer(
+                remote_log_dir.as_ref(),
+                use_latest_date_dir,
+            )?;
+
             // 发现文件
             let file_info_result = if self.config.remote.enabled && self.remote_connection.is_some()
             {
                 let connection = self.remote_connection.as_mut().unwrap();
                 self.discoverer.discover_and_select_remote(
                     connection,
-                    self.config.remote.log_dir.to_str().unwrap(),
+                    &effective_log_dir,
                     pattern,
                 )
             } else {

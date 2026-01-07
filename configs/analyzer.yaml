@@ -52,6 +52,8 @@ analyzers:
     enabled: true
     required: true  # 标记为必需
     is_primary: true  # 标记为主时间轴
+    # master_control 日志在日期子目录中（如 /home/linux/.ros/log/20251226/）
+    use_latest_date_dir: true
     # 插件特定配置（可选）
     config:
       detect_rounds: true
@@ -62,7 +64,7 @@ analyzers:
     pattern: "arm_decision*.log"
     plugin: "arm-decision-analyzer"
     description: "机械臂决策系统日志分析器"
-    enabled: true
+    enabled: false 
     required: false
 
   # 外部导航日志（可选）

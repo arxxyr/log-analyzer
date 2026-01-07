@@ -28,6 +28,7 @@ serde_json = { workspace = true }
 regex = { workspace = true }
 csv = { workspace = true }
 chrono = { workspace = true }
+chrono-tz = { workspace = true }
 plotters = { workspace = true }
 
 # 文件系统和路径
