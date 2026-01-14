@@ -55,11 +55,9 @@ pub fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<Navigatio
     let adapter_wait_regex =
         Regex::new(r"ROS2ActionAdapter\[(\w+)\]\s*-\s*等待服务器\s*'([^']+)'")?;
     // ROS2ActionAdapter[type] - 服务器已就绪
-    let adapter_ready_regex =
-        Regex::new(r"ROS2ActionAdapter\[(\w+)\]\s*-\s*服务器已就绪")?;
+    let adapter_ready_regex = Regex::new(r"ROS2ActionAdapter\[(\w+)\]\s*-\s*服务器已就绪")?;
     // ROS2ActionAdapter[type] - 发送目标
-    let adapter_send_regex =
-        Regex::new(r"ROS2ActionAdapter\[(\w+)\]\s*-\s*发送目标")?;
+    let adapter_send_regex = Regex::new(r"ROS2ActionAdapter\[(\w+)\]\s*-\s*发送目标")?;
     // ROS2ActionAdapter[type] - 执行完成，结果: (成功|失败)
     let adapter_end_regex =
         Regex::new(r"ROS2ActionAdapter\[(\w+)\]\s*-\s*执行完成，结果:\s*(\S+)")?;
@@ -72,23 +70,18 @@ pub fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<Navigatio
 
     // 预打舵相关正则（PrePlanNavigationNode 格式）
     // PrePlanNavigationNode[xxx] - 开始执行
-    let preplan_start_regex =
-        Regex::new(r"PrePlanNavigationNode\[([^\]]+)\]\s*-\s*开始执行")?;
+    let preplan_start_regex = Regex::new(r"PrePlanNavigationNode\[([^\]]+)\]\s*-\s*开始执行")?;
     // PrePlanNavigationNode[xxx] - 设置预规划目标:
     //   位置: (x, y, z)
     //   action=N, first_dir=M, rotate_mode=K
-    let preplan_pos_regex =
-        Regex::new(r"PrePlanNavigationNode\[([^\]]+)\]\s*-\s*设置预规划目标:")?;
-    let preplan_position_regex =
-        Regex::new(r"位置:\s*\(([^)]+)\)")?;
-    let preplan_action_regex =
-        Regex::new(r"action=(\d+)")?;
+    let preplan_pos_regex = Regex::new(r"PrePlanNavigationNode\[([^\]]+)\]\s*-\s*设置预规划目标:")?;
+    let preplan_position_regex = Regex::new(r"位置:\s*\(([^)]+)\)")?;
+    let preplan_action_regex = Regex::new(r"action=(\d+)")?;
     // PrePlanNavigationNode[xxx] - 服务响应: error_code=N
     let preplan_response_regex =
         Regex::new(r"PrePlanNavigationNode\[([^\]]+)\]\s*-\s*服务响应:\s*error_code=(\d+)")?;
     // PrePlanNavigationNode[xxx] - 执行成功
-    let preplan_end_regex =
-        Regex::new(r"PrePlanNavigationNode\[([^\]]+)\]\s*-\s*执行成功")?;
+    let preplan_end_regex = Regex::new(r"PrePlanNavigationNode\[([^\]]+)\]\s*-\s*执行成功")?;
 
     // 新格式: action_type_code 提取
     let action_code_regex = Regex::new(r"action_type_code=(\d+)")?;
@@ -117,8 +110,7 @@ pub fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<Navigatio
 
     // BehaviorTree 中间动作模块正则
     // [ModuleName] node=ModuleName phase=start ...
-    let bt_module_start_regex =
-        Regex::new(r"\[(\w+)\]\s+node=\w+\s+phase=start")?;
+    let bt_module_start_regex = Regex::new(r"\[(\w+)\]\s+node=\w+\s+phase=start")?;
     // [ModuleName] node=ModuleName phase=end status=success cost_ms=XXX
     let bt_module_end_regex =
         Regex::new(r"\[(\w+)\]\s+node=\w+\s+phase=end\s+status=(\w+)\s+cost_ms=(\d+)")?;
@@ -127,29 +119,39 @@ pub fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<Navigatio
         Regex::new(r"\[ExecuteDoubleArmMoveAction\]\s+result\s+received\s+code=(\d+)")?;
 
     // ============================================================
+    // 细化阶段检测正则（BehaviorTreeNode 内部子阶段）
+    // ============================================================
+    // GetReadyPoseAction phase=start/end
+    let get_ready_pose_start_regex = Regex::new(r"node=GetReadyPoseAction\s+phase=start")?;
+    let get_ready_pose_end_regex =
+        Regex::new(r"node=GetReadyPoseAction\s+phase=end\s+status=(\w+)\s+cost_ms=(\d+)")?;
+    // DetObjPose start/done
+    let det_obj_pose_start_regex = Regex::new(r"DetObjPose start camera_id=(\w+).*obj_id=(\d+)")?;
+    let det_obj_pose_response_regex = Regex::new(r"DetObjPose response ret=(\d+)")?;
+    let det_obj_pose_done_regex = Regex::new(r"DetObjPose done goal_pose=")?;
+    // gripper done
+    let gripper_done_regex = Regex::new(r"gripper done status=(\w+) cost_ms=(\d+)")?;
+
+    // ============================================================
     // 手臂动作子阶段正则（BehaviorTreeNode 内部）
     // ============================================================
     // gripper start arm=xxx open=xxx
-    let gripper_start_regex =
-        Regex::new(r"gripper start arm=(\w+) open=(\w+)")?;
+    let gripper_start_regex = Regex::new(r"gripper start arm=(\w+) open=(\w+)")?;
     // gripper request: cmd_code=xxx arm=xxx
-    let gripper_request_regex =
-        Regex::new(r"gripper request: cmd_code=(\d+) arm=(\w+)")?;
+    let gripper_request_regex = Regex::new(r"gripper request: cmd_code=(\d+) arm=(\w+)")?;
     // ArmObstacle start cmd=xxx
-    let arm_obstacle_start_regex =
-        Regex::new(r"ArmObstacle start cmd=(\d+)")?;
+    let arm_obstacle_start_regex = Regex::new(r"ArmObstacle start cmd=(\d+)")?;
     // ArmObstacle done resp_status=xxx
-    let arm_obstacle_done_regex =
-        Regex::new(r"ArmObstacle done resp_status=(\d+)")?;
-    // arm_transition_point start cmd=xxx / custom start cmd=xxx
+    let arm_obstacle_done_regex = Regex::new(r"ArmObstacle done resp_status=(\d+)")?;
+    // arm_transition_point: 只匹配 "- start cmd=" 不匹配 "custom start cmd="（同一操作会输出两行）
     let arm_transition_start_regex =
-        Regex::new(r"(?:start|custom start) cmd=(\d+).*service=arm_transition_point")?;
-    // custom done resp_status=xxx
-    let arm_transition_done_regex =
-        Regex::new(r"custom done resp_status=(\d+)")?;
+        Regex::new(r"- start cmd=(\d+).*service=arm_transition_point")?;
+    // arm_transition_point 完成: 匹配任意 "custom done" 格式
+    // - custom done reference_state_n=... (ik=0)
+    // - custom done resp_status=... (ik=1)
+    let arm_transition_done_regex = Regex::new(r"custom done (?:resp_status=(\d+)|reference_state_n=)")?;
     // arm_move start cmd=xxx
-    let arm_move_start_regex =
-        Regex::new(r"arm_move start cmd=(\d+)")?;
+    let arm_move_start_regex = Regex::new(r"arm_move start cmd=(\d+)")?;
     // arm_move response: success cmd=xxx / result code=xxx
     let arm_move_response_regex =
         Regex::new(r"arm_move response: (?:success cmd=(\d+)|result code=(\d+))")?;
@@ -173,6 +175,9 @@ pub fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<Navigatio
     let mut active_bt_node: Option<BtNodeContext> = None;
     // 活跃的 BT 子动作（用于跟踪中间模块）
     let mut active_bt_subaction: Option<(String, f64)> = None; // (module_name, start_ts)
+
+    // 准备阶段跟踪（合并多个连续的 GetReadyPoseAction）
+    let mut ready_pose_phase: Option<(f64, u32)> = None; // (start_ts, count)
 
     for (line_idx, line) in lines.iter().enumerate() {
         // ============================================================
@@ -324,6 +329,148 @@ pub fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<Navigatio
                             name: format!("gripper request cmd={} arm={}", cmd, arm),
                             timestamp: line.timestamp,
                         });
+                        break;
+                    }
+                }
+            }
+            continue;
+        }
+
+        // gripper 完成
+        if let Some(caps) = gripper_done_regex.captures(&line.line) {
+            let status = caps[1].to_string();
+            let cost_ms: u32 = caps[2].parse().unwrap_or(0);
+            if let Some(ref mut ctx) = active_bt_node {
+                for action in ctx.sub_actions.iter_mut().rev() {
+                    if action.action_type == "gripper" && action.end_ts.is_none() {
+                        action.sub_steps.push(SubStep {
+                            name: format!("gripper done ({}ms)", cost_ms),
+                            timestamp: line.timestamp,
+                        });
+                        action.end_ts = Some(line.timestamp);
+                        action.status = status.clone();
+                        break;
+                    }
+                }
+            }
+            continue;
+        }
+
+        // ============================================================
+        // 细化阶段检测（GetReadyPoseAction、DetObjPose 等）
+        // ============================================================
+
+        // GetReadyPoseAction 开始（合并连续的准备阶段）
+        if get_ready_pose_start_regex.is_match(&line.line) {
+            if let Some(ref mut ctx) = active_bt_node {
+                // 如果还没有准备阶段，开始新的
+                if ready_pose_phase.is_none() {
+                    ready_pose_phase = Some((line.timestamp, 1));
+                    ctx.sub_actions.push(ActionOperation {
+                        action_type: "ready_pose".to_string(),
+                        action_code: None,
+                        label: "准备阶段".to_string(),
+                        start_ts: Some(line.timestamp),
+                        end_ts: None,
+                        status: "pending".to_string(),
+                        sub_steps: vec![SubStep {
+                            name: "GetReadyPose #1 开始".to_string(),
+                            timestamp: line.timestamp,
+                        }],
+                    });
+                } else {
+                    // 增加计数
+                    if let Some((_, ref mut count)) = ready_pose_phase {
+                        *count += 1;
+                        // 为现有的准备阶段动作添加子步骤
+                        for action in ctx.sub_actions.iter_mut().rev() {
+                            if action.action_type == "ready_pose" && action.end_ts.is_none() {
+                                action.sub_steps.push(SubStep {
+                                    name: format!("GetReadyPose #{} 开始", count),
+                                    timestamp: line.timestamp,
+                                });
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            continue;
+        }
+
+        // GetReadyPoseAction 结束
+        if let Some(caps) = get_ready_pose_end_regex.captures(&line.line) {
+            let _status = caps[1].to_string();
+            let cost_ms: u32 = caps[2].parse().unwrap_or(0);
+            if let Some(ref mut ctx) = active_bt_node {
+                if let Some((_, count)) = ready_pose_phase {
+                    for action in ctx.sub_actions.iter_mut().rev() {
+                        if action.action_type == "ready_pose" && action.end_ts.is_none() {
+                            action.sub_steps.push(SubStep {
+                                name: format!("GetReadyPose #{} 完成 ({}ms)", count, cost_ms),
+                                timestamp: line.timestamp,
+                            });
+                            // 更新结束时间（每次都更新，最终为最后一个的结束时间）
+                            action.end_ts = Some(line.timestamp);
+                            action.status = "ok".to_string();
+                            break;
+                        }
+                    }
+                }
+            }
+            continue;
+        }
+
+        // DetObjPose 开始
+        if let Some(caps) = det_obj_pose_start_regex.captures(&line.line) {
+            // 结束准备阶段（如果有）
+            ready_pose_phase = None;
+
+            let camera_id = caps[1].to_string();
+            let obj_id = caps[2].to_string();
+            if let Some(ref mut ctx) = active_bt_node {
+                ctx.sub_actions.push(ActionOperation {
+                    action_type: "det_obj_pose".to_string(),
+                    action_code: obj_id.parse().ok(),
+                    label: format!("DetObjPose({},{})", camera_id, obj_id),
+                    start_ts: Some(line.timestamp),
+                    end_ts: None,
+                    status: "pending".to_string(),
+                    sub_steps: vec![SubStep {
+                        name: format!("DetObjPose start cam={} obj={}", camera_id, obj_id),
+                        timestamp: line.timestamp,
+                    }],
+                });
+            }
+            continue;
+        }
+
+        // DetObjPose 响应
+        if let Some(caps) = det_obj_pose_response_regex.captures(&line.line) {
+            let ret = caps[1].to_string();
+            if let Some(ref mut ctx) = active_bt_node {
+                for action in ctx.sub_actions.iter_mut().rev() {
+                    if action.action_type == "det_obj_pose" && action.end_ts.is_none() {
+                        action.sub_steps.push(SubStep {
+                            name: format!("DetObjPose response ret={}", ret),
+                            timestamp: line.timestamp,
+                        });
+                        break;
+                    }
+                }
+            }
+            continue;
+        }
+
+        // DetObjPose 完成
+        if det_obj_pose_done_regex.is_match(&line.line) {
+            if let Some(ref mut ctx) = active_bt_node {
+                for action in ctx.sub_actions.iter_mut().rev() {
+                    if action.action_type == "det_obj_pose" && action.end_ts.is_none() {
+                        action.sub_steps.push(SubStep {
+                            name: "DetObjPose done".to_string(),
+                            timestamp: line.timestamp,
+                        });
                         action.end_ts = Some(line.timestamp);
                         action.status = "ok".to_string();
                         break;
@@ -335,6 +482,9 @@ pub fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<Navigatio
 
         // ArmObstacle 开始
         if let Some(caps) = arm_obstacle_start_regex.captures(&line.line) {
+            // 结束准备阶段（如果有）
+            ready_pose_phase = None;
+
             let cmd = caps[1].to_string();
             if let Some(ref mut ctx) = active_bt_node {
                 ctx.sub_actions.push(ActionOperation {
@@ -364,7 +514,11 @@ pub fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<Navigatio
                             timestamp: line.timestamp,
                         });
                         action.end_ts = Some(line.timestamp);
-                        action.status = if status == "0" { "ok".to_string() } else { format!("status_{}", status) };
+                        action.status = if status == "0" {
+                            "ok".to_string()
+                        } else {
+                            format!("status_{}", status)
+                        };
                         break;
                     }
                 }
@@ -394,7 +548,8 @@ pub fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<Navigatio
 
         // arm_transition_point 完成
         if let Some(caps) = arm_transition_done_regex.captures(&line.line) {
-            let status = caps[1].to_string();
+            // caps[1] 可能为空（当匹配 reference_state_n= 时）
+            let status = caps.get(1).map(|m| m.as_str()).unwrap_or("0").to_string();
             if let Some(ref mut ctx) = active_bt_node {
                 for action in ctx.sub_actions.iter_mut().rev() {
                     if action.action_type == "transition" && action.end_ts.is_none() {
@@ -403,7 +558,11 @@ pub fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<Navigatio
                             timestamp: line.timestamp,
                         });
                         action.end_ts = Some(line.timestamp);
-                        action.status = if status == "0" { "ok".to_string() } else { format!("status_{}", status) };
+                        action.status = if status == "0" {
+                            "ok".to_string()
+                        } else {
+                            format!("status_{}", status)
+                        };
                         break;
                     }
                 }
@@ -460,8 +619,11 @@ pub fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<Navigatio
                 }
             }
 
-            // 完成 BT 节点，创建动作操作
+            // 完成 BT 节点，将子动作作为独立操作添加到流程中
             if let Some(ctx) = active_bt_node.take() {
+                // 重置准备阶段跟踪
+                ready_pose_phase = None;
+
                 let round_id = ts_to_round_id(ctx.start_ts, rounds);
                 let label = if let Some(code) = ctx.action_code {
                     format!("{}({})", ctx.node_id, code)
@@ -469,37 +631,11 @@ pub fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<Navigatio
                     ctx.node_id.clone()
                 };
 
-                // 创建主动作（包含所有子动作作为子步骤）
-                let mut sub_steps = vec![SubStep {
-                    name: "节点开始".to_string(),
-                    timestamp: ctx.start_ts,
-                }];
-
-                // 将子动作转换为子步骤
-                for sub_action in &ctx.sub_actions {
-                    if let Some(start) = sub_action.start_ts {
-                        sub_steps.push(SubStep {
-                            name: format!("{} 开始", sub_action.label),
-                            timestamp: start,
-                        });
-                    }
-                    if let Some(end) = sub_action.end_ts {
-                        sub_steps.push(SubStep {
-                            name: format!("{} 完成", sub_action.label),
-                            timestamp: end,
-                        });
-                    }
-                }
-
-                sub_steps.push(SubStep {
-                    name: format!("节点结束({})", result_status),
-                    timestamp: line.timestamp,
-                });
-
+                // 创建主 BT 节点动作（作为容器，用于显示整体时间范围）
                 let bt_action = ActionOperation {
-                    action_type: "arm".to_string(), // 归类为 arm 类型以便甘特图显示
+                    action_type: "arm".to_string(),
                     action_code: ctx.action_code,
-                    label,
+                    label: label.clone(),
                     start_ts: Some(ctx.start_ts),
                     end_ts: Some(line.timestamp),
                     status: if result_status == "SUCCESS" {
@@ -507,8 +643,28 @@ pub fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<Navigatio
                     } else {
                         format!("failed_{}", result_status)
                     },
-                    sub_steps,
+                    sub_steps: vec![
+                        SubStep {
+                            name: "节点开始".to_string(),
+                            timestamp: ctx.start_ts,
+                        },
+                        SubStep {
+                            name: format!("节点结束({})", result_status),
+                            timestamp: line.timestamp,
+                        },
+                    ],
                 };
+
+                // 收集所有要添加的操作（主动作 + 子动作）
+                let mut operations_to_add = vec![bt_action];
+
+                // 将子动作作为独立操作添加
+                for sub_action in ctx.sub_actions {
+                    // 只添加有有效时间范围的子动作
+                    if sub_action.start_ts.is_some() {
+                        operations_to_add.push(sub_action);
+                    }
+                }
 
                 // 添加到流程中
                 if current_flow.is_none()
@@ -528,10 +684,10 @@ pub fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<Navigatio
                         nav_status: "ok".to_string(),
                         nav_sub_steps: Vec::new(),
                         round_id,
-                        operations: vec![bt_action],
+                        operations: operations_to_add,
                     });
                 } else if let Some(ref mut flow) = current_flow {
-                    flow.operations.push(bt_action);
+                    flow.operations.extend(operations_to_add);
                 }
             }
             continue;
@@ -604,9 +760,7 @@ pub fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<Navigatio
             if let Some((_, action)) = active_adapters
                 .iter_mut()
                 .filter(|(k, a)| k.starts_with(&adapter_type) && a.end_ts.is_none())
-                .max_by(|(_, a1), (_, a2)| {
-                    a1.start_ts.partial_cmp(&a2.start_ts).unwrap()
-                })
+                .max_by(|(_, a1), (_, a2)| a1.start_ts.partial_cmp(&a2.start_ts).unwrap())
             {
                 action.sub_steps.push(SubStep {
                     name: format!("等待服务器 '{}'...", server_name),
@@ -622,9 +776,7 @@ pub fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<Navigatio
             if let Some((_, action)) = active_adapters
                 .iter_mut()
                 .filter(|(k, a)| k.starts_with(&adapter_type) && a.end_ts.is_none())
-                .max_by(|(_, a1), (_, a2)| {
-                    a1.start_ts.partial_cmp(&a2.start_ts).unwrap()
-                })
+                .max_by(|(_, a1), (_, a2)| a1.start_ts.partial_cmp(&a2.start_ts).unwrap())
             {
                 action.sub_steps.push(SubStep {
                     name: "服务器已就绪".to_string(),
@@ -640,9 +792,7 @@ pub fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<Navigatio
             if let Some((_, action)) = active_adapters
                 .iter_mut()
                 .filter(|(k, a)| k.starts_with(&adapter_type) && a.end_ts.is_none())
-                .max_by(|(_, a1), (_, a2)| {
-                    a1.start_ts.partial_cmp(&a2.start_ts).unwrap()
-                })
+                .max_by(|(_, a1), (_, a2)| a1.start_ts.partial_cmp(&a2.start_ts).unwrap())
             {
                 action.sub_steps.push(SubStep {
                     name: "发送目标".to_string(),
@@ -659,9 +809,7 @@ pub fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<Navigatio
             if let Some((_, action)) = active_adapters
                 .iter_mut()
                 .filter(|(k, a)| k.starts_with(&adapter_type) && a.end_ts.is_none())
-                .max_by(|(_, a1), (_, a2)| {
-                    a1.start_ts.partial_cmp(&a2.start_ts).unwrap()
-                })
+                .max_by(|(_, a1), (_, a2)| a1.start_ts.partial_cmp(&a2.start_ts).unwrap())
             {
                 action.sub_steps.push(SubStep {
                     name: "执行中".to_string(),
@@ -679,9 +827,7 @@ pub fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<Navigatio
             if let Some((_, action)) = active_adapters
                 .iter_mut()
                 .filter(|(k, a)| k.starts_with(&adapter_type) && a.end_ts.is_none())
-                .max_by(|(_, a1), (_, a2)| {
-                    a1.start_ts.partial_cmp(&a2.start_ts).unwrap()
-                })
+                .max_by(|(_, a1), (_, a2)| a1.start_ts.partial_cmp(&a2.start_ts).unwrap())
             {
                 action.sub_steps.push(SubStep {
                     name: format!("[RESULT] 完成，成功: {}", success),
@@ -718,7 +864,8 @@ pub fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<Navigatio
             // 将完成的动作添加到当前流程或创建新流程
             if let Some(key) = completed_key {
                 if let Some(action) = active_adapters.remove(&key) {
-                    let round_id = ts_to_round_id(action.start_ts.unwrap_or(line.timestamp), rounds);
+                    let round_id =
+                        ts_to_round_id(action.start_ts.unwrap_or(line.timestamp), rounds);
 
                     // 如果当前没有流程或轮次不同，创建新流程
                     if current_flow.is_none()
@@ -731,11 +878,12 @@ pub fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<Navigatio
 
                         // 创建新流程
                         // 如果第一个动作是导航，设置 nav_start_ts/nav_end_ts
-                        let (nav_start, nav_end, nav_sub_steps) = if action.action_type == "navigation" {
-                            (action.start_ts, action.end_ts, action.sub_steps.clone())
-                        } else {
-                            (None, None, Vec::new())
-                        };
+                        let (nav_start, nav_end, nav_sub_steps) =
+                            if action.action_type == "navigation" {
+                                (action.start_ts, action.end_ts, action.sub_steps.clone())
+                            } else {
+                                (None, None, Vec::new())
+                            };
                         current_flow = Some(NavigationFlow {
                             nav_start_ts: nav_start,
                             nav_end_ts: nav_end,
@@ -781,8 +929,7 @@ pub fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<Navigatio
 
             // 确保有流程可以添加动作
             let round_id = ts_to_round_id(line.timestamp, rounds);
-            if current_flow.is_none()
-                || current_flow.as_ref().map(|f| f.round_id) != Some(round_id)
+            if current_flow.is_none() || current_flow.as_ref().map(|f| f.round_id) != Some(round_id)
             {
                 // 保存当前流程
                 if let Some(flow) = current_flow.take() {
@@ -947,4 +1094,3 @@ pub fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<Navigatio
 
     Ok(flows)
 }
-

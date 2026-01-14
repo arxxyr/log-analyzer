@@ -72,14 +72,12 @@ fn generate_round_gantt(
     let font_loader = FontLoader::default();
 
     let _round_start = round.start_ts - _t0;
-    let round_duration = round.end_ts.map(|end| end - round.start_ts).unwrap_or(0.0);
+    let total_duration = round.end_ts.map(|end| end - round.start_ts).unwrap_or(0.0);
+    let pause_duration = round.total_pause_duration();
+    let effective_duration = round.effective_duration();
 
-    // 计算轮次开始和结束的北京时间
+    // 计算轮次开始的北京时间
     let round_start_beijing = timestamp_to_beijing_time(round.start_ts);
-    let round_end_beijing = round
-        .end_ts
-        .map(timestamp_to_beijing_time)
-        .unwrap_or_else(|| "未结束".to_string());
 
     // 准备图表数据: (label, detail_info, start, duration, type, sub_steps)
     let mut chart_data = Vec::new();
@@ -197,6 +195,13 @@ fn generate_round_gantt(
         ("arm", "手臂"),
         ("head", "头部"),
         ("waist", "腰部"),
+        // BehaviorTree 内部子阶段
+        ("ready_pose", "准备阶段"),
+        ("det_obj_pose", "目标检测"),
+        ("obstacle", "障碍物"),
+        ("transition", "过渡点"),
+        ("arm_move", "手臂运动"),
+        ("gripper", "夹爪"),
     ];
 
     // 收集所有出现的动作类型并分配Y轴位置
@@ -214,7 +219,7 @@ fn generate_round_gantt(
             action_type_map.insert(action_type.clone(), action_types.len());
             let total_duration = action_type_durations.get(action_type).unwrap_or(&0.0);
             action_types.push(format!(
-                "其他({}) (总计: {:.1}s)",
+                "{} (总计: {:.1}s)",
                 action_type, total_duration
             ));
         }
@@ -233,23 +238,46 @@ fn generate_round_gantt(
     let root = BitMapBackend::new(&filename, (canvas_width, canvas_height)).into_drawing_area();
     root.fill(&WHITE)?;
 
-    let max_time = round_duration.max(
+    let max_time = total_duration.max(
         chart_data
             .iter()
             .map(|(_, _, start, dur, _, _)| start + dur)
             .fold(0.0, f64::max),
     );
 
-    // 构建标题，包含循环类型
-    let title = format!(
-        "{} (Round {}) Timeline (Total: {:.3}s)\n层级{} | 北京时间: {} - {}",
-        round.cycle_type,
-        round.id,
-        round_duration,
-        round.layer_index,
-        round_start_beijing,
-        round_end_beijing
-    );
+    // 提取结束时间的时分秒部分（只显示 HH:MM:SS.ffffff）
+    let round_end_beijing_short = round
+        .end_ts
+        .map(|ts| {
+            let full = timestamp_to_beijing_time(ts);
+            // 格式: "2026-01-13 17:35:02.438866" -> "17:35:02.438866"
+            full.split_whitespace().nth(1).unwrap_or(&full).to_string()
+        })
+        .unwrap_or_else(|| "未结束".to_string());
+
+    // 构建标题，包含循环类型（去掉层级信息）
+    // 如果有暂停时间，显示有效时间和暂停时间
+    let title = if pause_duration > 0.0 {
+        format!(
+            "{} (Round {}) Timeline (有效: {:.3}s, 暂停: {:.3}s, 总计: {:.3}s)\n北京时间: {} - {}",
+            round.cycle_type,
+            round.id,
+            effective_duration,
+            pause_duration,
+            total_duration,
+            round_start_beijing,
+            round_end_beijing_short
+        )
+    } else {
+        format!(
+            "{} (Round {}) Timeline (Total: {:.3}s)\n北京时间: {} - {}",
+            round.cycle_type,
+            round.id,
+            total_duration,
+            round_start_beijing,
+            round_end_beijing_short
+        )
+    };
 
     let mut chart = ChartBuilder::on(&root)
         .caption(&title, ("sans-serif", 192))
@@ -264,6 +292,7 @@ fn generate_round_gantt(
         .x_desc("时间 (相对于轮次开始的秒数)")
         .axis_desc_style(("sans-serif", 96))
         .label_style(("sans-serif", 72))
+        .y_labels(action_types.len() + 1) // 确保显示所有类型标签
         .y_label_formatter(&|y| {
             let idx = *y as usize;
             if idx < action_types.len() {
@@ -274,10 +303,6 @@ fn generate_round_gantt(
         })
         .draw()?;
 
-    // 为同一类型的重叠动作计算垂直偏移
-    // 每个动作类型维护多个层，每层记录其最后的结束时间
-    let mut type_action_layers: HashMap<String, Vec<f64>> = HashMap::new();
-
     for (_label, detail_info, start, duration, step_type, sub_steps) in &chart_data {
         let base_color = match step_type.as_str() {
             "nav" | "navigation" => RGBColor(173, 216, 230), // 浅蓝色 - 导航
@@ -285,40 +310,22 @@ fn generate_round_gantt(
             "arm" => RGBColor(144, 238, 144),                // 浅绿色 - 手臂
             "head" => RGBColor(255, 218, 185),               // 浅橙色 - 头部
             "waist" => RGBColor(221, 160, 221),              // 浅紫色 - 腰部
-            _ => RGBColor(192, 192, 192),                    // 灰色 - 其他
+            // BehaviorTree 内部子阶段
+            "ready_pose" => RGBColor(176, 224, 230), // 粉蓝色 - 准备阶段
+            "det_obj_pose" => RGBColor(255, 228, 181), // 浅黄橙 - 目标检测
+            "obstacle" => RGBColor(255, 182, 193),   // 浅粉红 - 障碍物
+            "transition" => RGBColor(216, 191, 216), // 淡紫色 - 过渡点
+            "arm_move" => RGBColor(152, 251, 152),   // 淡绿色 - 手臂运动
+            "gripper" => RGBColor(240, 230, 140),    // 卡其色 - 夹爪
+            _ => RGBColor(192, 192, 192),            // 灰色 - 其他
         };
 
         // 获取该动作类型的Y轴位置
         let y_base = *action_type_map.get(step_type).unwrap() as f64;
 
-        // 找到第一个可用的层（结束时间早于当前动作开始时间）
-        let layers = type_action_layers.entry(step_type.clone()).or_default();
-
-        let mut layer_idx = 0;
-        let mut found_layer = false;
-
-        // 遍历已有的层，找到第一个不冲突的层
-        for (idx, &end_time) in layers.iter().enumerate() {
-            if *start >= end_time {
-                // 当前动作的开始时间晚于或等于这一层的结束时间，可以使用这一层
-                layer_idx = idx;
-                found_layer = true;
-                break;
-            }
-        }
-
-        // 如果没有找到可用的层，创建新层
-        if !found_layer {
-            layer_idx = layers.len();
-            layers.push(*start + *duration);
-        } else {
-            // 更新该层的结束时间
-            layers[layer_idx] = *start + *duration;
-        }
-
-        let y_offset = layer_idx as f64 * 0.25; // 每层偏移0.25
-        let y_pos = y_base + y_offset;
-        let y_height = 0.4; // 条形高度
+        // 所有同类型操作在同一水平线上，按时间横向排列
+        let y_height = 0.6; // 条形高度
+        let y_pos = y_base;
 
         // 绘制主方块
         chart.draw_series(std::iter::once(Rectangle::new(
@@ -394,15 +401,24 @@ where
     let get_sub_step_color = |name: &str, index: usize| -> RGBColor {
         // BehaviorTree 模块 - 使用交替颜色增强分隔
         if name.contains("GetReadyPose") {
-            RGBColor(135, 206, 250) // 淡天蓝
-        } else if name.contains("ModifyArmObstacle") {
+            // 根据序号使用交替颜色（准备阶段内部）
+            if index % 2 == 0 {
+                RGBColor(135, 206, 250) // 淡天蓝
+            } else {
+                RGBColor(176, 224, 230) // 粉蓝
+            }
+        } else if name.contains("DetObjPose") {
+            RGBColor(255, 228, 181) // 浅黄橙
+        } else if name.contains("ArmObstacle") || name.contains("ModifyArmObstacle") {
             RGBColor(255, 182, 193) // 淡粉红
         } else if name.contains("GetGoalPose") {
             RGBColor(152, 251, 152) // 淡绿
-        } else if name.contains("ArmTransitionPoint") {
-            RGBColor(255, 218, 185) // 桃色
-        } else if name.contains("ExecuteDoubleArmMove") {
-            RGBColor(173, 216, 230) // 淡蓝
+        } else if name.contains("ArmTransitionPoint") || name.contains("transition") {
+            RGBColor(216, 191, 216) // 淡紫色
+        } else if name.contains("ExecuteDoubleArmMove") || name.contains("arm_move") {
+            RGBColor(152, 251, 152) // 淡绿
+        } else if name.contains("gripper") {
+            RGBColor(240, 230, 140) // 卡其色
         } else if name.contains("节点开始") {
             RGBColor(100, 149, 237) // 矢车菊蓝
         } else if name.contains("节点结束") {
@@ -427,9 +443,7 @@ where
         // 导航/master_control 旧格式
         else if name == "设置导航目标" {
             RGBColor(70, 130, 180) // 钢蓝
-        } else if name == "发送导航目标"
-            || name == "发送头部控制目标"
-            || name == "发送腰部控制目标"
+        } else if name == "发送导航目标" || name == "发送头部控制目标" || name == "发送腰部控制目标"
         {
             RGBColor(255, 165, 0) // 橙色
         } else if name == "服务端接受" {
@@ -567,14 +581,14 @@ fn extract_short_module_name(full_name: &str) -> (String, String) {
         "夹爪"
     } else if name_part.starts_with("GetTaskType") {
         "获取类型"
-    } else if name_part.starts_with("GetDetObjPose") {
+    } else if name_part.starts_with("GetDetObjPose") || name_part.starts_with("DetObjPose") {
         "检测位姿"
-    } else if name_part.contains("ModifyArmObstacle") {
-        "修改障碍"
-    } else if name_part.contains("ArmTransitionPoint") {
+    } else if name_part.contains("ArmObstacle") || name_part.contains("ModifyArmObstacle") {
+        "障碍物"
+    } else if name_part.contains("ArmTransitionPoint") || name_part.contains("transition") {
         "过渡点"
-    } else if name_part.contains("ExecuteDoubleArmMove") {
-        "双臂运动"
+    } else if name_part.contains("ExecuteDoubleArmMove") || name_part.contains("arm_move") {
+        "手臂运动"
     } else if name_part.contains("GetGoalPose") {
         "目标位姿"
     } else if name_part.starts_with("GetArmPose") {
@@ -594,7 +608,9 @@ fn extract_short_module_name(full_name: &str) -> (String, String) {
     } else if name_part.starts_with("WaitForTrigger") {
         "等待触发"
     } else if name_part.contains("GetReadyPose") {
-        "准备位姿"
+        "准备"
+    } else if name_part.starts_with("gripper") {
+        "夹爪"
     } else if name_part.starts_with("SendGoal") {
         "发送目标"
     // ROS2ActionAdapter 相关阶段
@@ -654,7 +670,11 @@ fn extract_short_module_name(full_name: &str) -> (String, String) {
     } else {
         // 如果名称太长，截取前6个字符
         if name_part.chars().count() > 8 {
-            &name_part[..name_part.char_indices().nth(8).map(|(i, _)| i).unwrap_or(name_part.len())]
+            &name_part[..name_part
+                .char_indices()
+                .nth(8)
+                .map(|(i, _)| i)
+                .unwrap_or(name_part.len())]
         } else {
             name_part
         }
@@ -765,6 +785,158 @@ where
                 .transform(FontTransform::None),
         )))?;
     }
+
+    Ok(())
+}
+
+/// 生成常规循环耗时统计图
+///
+/// 横坐标是每个已完成的常规循环序号，纵坐标是对应的有效耗时（扣除暂停时间）
+/// 同时绘制平均时间线
+///
+/// # 参数
+/// * `rounds` - 轮次切片
+/// * `outdir` - 输出目录
+pub fn generate_cycle_duration_chart(rounds: &[Round], outdir: &str) -> Result<()> {
+    use crate::models::CycleType;
+
+    let font_loader = FontLoader::default();
+
+    // 筛选已完成的常规循环
+    let completed_normal_cycles: Vec<_> = rounds
+        .iter()
+        .filter(|r| matches!(r.cycle_type, CycleType::Normal(_)) && r.end_ts.is_some())
+        .collect();
+
+    if completed_normal_cycles.is_empty() {
+        eprintln!("[统计图] 没有已完成的常规循环，跳过生成统计图");
+        return Ok(());
+    }
+
+    // 计算每个循环的有效耗时
+    let durations: Vec<f64> = completed_normal_cycles
+        .iter()
+        .map(|r| r.effective_duration())
+        .collect();
+
+    let cycle_count = durations.len();
+    let avg_duration = durations.iter().sum::<f64>() / cycle_count as f64;
+    let max_duration = durations.iter().cloned().fold(0.0_f64, f64::max);
+    let min_duration = durations.iter().cloned().fold(f64::MAX, f64::min);
+
+    // 图表尺寸
+    let width = 1600u32;
+    let height = 900u32;
+
+    let file_path = format!("{}/cycle_duration_stats.png", outdir);
+    let root = BitMapBackend::new(&file_path, (width, height)).into_drawing_area();
+    root.fill(&WHITE)?;
+
+    // 标题
+    let title = format!(
+        "常规循环耗时统计 (共{}个已完成循环，平均: {:.2}s)",
+        cycle_count, avg_duration
+    );
+
+    // Y轴范围，留出一些余量
+    let y_max = (max_duration * 1.15).max(avg_duration * 1.3);
+    let y_min = 0.0;
+
+    let mut chart = ChartBuilder::on(&root)
+        .caption(&title, font_loader.font_desc(28).color(&BLACK))
+        .margin(20)
+        .x_label_area_size(50)
+        .y_label_area_size(80)
+        .build_cartesian_2d(0.5..(cycle_count as f64 + 0.5), y_min..y_max)?;
+
+    chart
+        .configure_mesh()
+        .x_labels(cycle_count.min(20))
+        .x_label_formatter(&|x| {
+            let idx = *x as usize;
+            if idx >= 1 && idx <= cycle_count {
+                format!("{}", idx)
+            } else {
+                String::new()
+            }
+        })
+        .y_label_formatter(&|y| format!("{:.1}s", y))
+        .x_desc("循环序号")
+        .y_desc("耗时 (秒)")
+        .axis_desc_style(font_loader.font_desc(18).color(&BLACK))
+        .label_style(font_loader.font_desc(14).color(&BLACK))
+        .draw()?;
+
+    // 绘制柱状图
+    let bar_width = 0.6;
+    chart.draw_series(durations.iter().enumerate().map(|(i, &duration)| {
+        let x = (i + 1) as f64;
+        let color = if duration > avg_duration * 1.2 {
+            RGBColor(255, 100, 100) // 超过平均20%显示红色
+        } else if duration < avg_duration * 0.8 {
+            RGBColor(100, 200, 100) // 低于平均20%显示绿色
+        } else {
+            RGBColor(100, 150, 230) // 正常显示蓝色
+        };
+        Rectangle::new(
+            [(x - bar_width / 2.0, 0.0), (x + bar_width / 2.0, duration)],
+            color.filled(),
+        )
+    }))?;
+
+    // 在柱状图上方显示具体数值
+    for (i, &duration) in durations.iter().enumerate() {
+        let x = (i + 1) as f64;
+        chart.draw_series(std::iter::once(Text::new(
+            format!("{:.1}", duration),
+            (x, duration + y_max * 0.02),
+            font_loader
+                .font_desc(12)
+                .color(&BLACK)
+                .pos(Pos::new(HPos::Center, VPos::Bottom)),
+        )))?;
+    }
+
+    // 绘制平均线
+    chart.draw_series(std::iter::once(PathElement::new(
+        vec![
+            (0.5, avg_duration),
+            (cycle_count as f64 + 0.5, avg_duration),
+        ],
+        ShapeStyle {
+            color: RED.mix(0.8).to_rgba(),
+            filled: false,
+            stroke_width: 2,
+        },
+    )))?;
+
+    // 平均线标签
+    chart.draw_series(std::iter::once(Text::new(
+        format!("平均: {:.2}s", avg_duration),
+        (cycle_count as f64 + 0.3, avg_duration),
+        font_loader
+            .font_desc(16)
+            .color(&RED)
+            .pos(Pos::new(HPos::Right, VPos::Center)),
+    )))?;
+
+    // 添加统计信息
+    let stats_text = format!(
+        "最大: {:.2}s  最小: {:.2}s  差值: {:.2}s",
+        max_duration,
+        min_duration,
+        max_duration - min_duration
+    );
+    root.draw(&Text::new(
+        stats_text,
+        (width as i32 / 2, height as i32 - 15),
+        font_loader
+            .font_desc(16)
+            .color(&BLACK)
+            .pos(Pos::new(HPos::Center, VPos::Bottom)),
+    ))?;
+
+    root.present()?;
 
     Ok(())
 }

@@ -34,6 +34,24 @@ impl std::fmt::Display for CycleType {
     }
 }
 
+/// 暂停事件
+#[derive(Debug, Clone)]
+pub struct PauseEvent {
+    /// 暂停开始时间戳
+    pub pause_ts: f64,
+    /// 恢复时间戳
+    pub resume_ts: Option<f64>,
+}
+
+impl PauseEvent {
+    /// 计算暂停持续时间
+    pub fn duration(&self) -> f64 {
+        self.resume_ts
+            .map(|resume| resume - self.pause_ts)
+            .unwrap_or(0.0)
+    }
+}
+
 /// 任务轮次
 #[derive(Debug, Clone)]
 pub struct Round {
@@ -53,6 +71,21 @@ pub struct Round {
     pub pose0: Option<String>,
     /// 目标姿态
     pub pose6: Option<String>,
+    /// 暂停事件列表
+    pub pause_events: Vec<PauseEvent>,
+}
+
+impl Round {
+    /// 计算总暂停时间
+    pub fn total_pause_duration(&self) -> f64 {
+        self.pause_events.iter().map(|e| e.duration()).sum()
+    }
+
+    /// 计算有效持续时间（总时长减去暂停时间）
+    pub fn effective_duration(&self) -> f64 {
+        let total = self.end_ts.map(|end| end - self.start_ts).unwrap_or(0.0);
+        (total - self.total_pause_duration()).max(0.0)
+    }
 }
 
 /// 动作内部的子步骤
@@ -104,27 +137,6 @@ pub struct NavigationFlow {
     pub operations: Vec<ActionOperation>,
 }
 
-/// 大流程结构，包含从循环1到循环8的完整流程
-#[derive(Debug, Clone)]
-pub struct MajorFlow {
-    /// 大流程ID
-    pub id: usize,
-    /// 包含的轮次
-    pub rounds: Vec<Round>,
-    /// 开始时间戳
-    pub start_ts: f64,
-    /// 结束时间戳
-    pub end_ts: f64,
-    /// 总持续时间（秒）
-    pub duration_s: f64,
-    /// 平均每轮持续时间（秒）
-    pub average_round_duration_s: f64,
-    /// 是否为完整流程（到达循环8）
-    pub is_complete: bool,
-    /// 失败点（如果不完整）
-    pub failure_point: Option<String>,
-}
-
 // ============================================================================
 // CSV 导出结构
 // ============================================================================
@@ -132,8 +144,6 @@ pub struct MajorFlow {
 /// CSV记录结构
 #[derive(Debug, Serialize)]
 pub struct CsvRecord {
-    /// 大流程ID
-    pub major_flow_id: Option<usize>,
     /// 轮次ID
     pub round_id: usize,
     /// 轮次开始相对时间（秒）

@@ -2,40 +2,24 @@
 //!
 //! 本模块负责将分析结果导出为CSV文件
 
-use std::collections::HashMap;
-
 use anyhow::Result;
 
-use crate::models::{CsvRecord, MajorFlow, NavigationFlow, Round};
+use crate::models::{CsvRecord, NavigationFlow, Round};
 use crate::utils::timestamp_to_beijing_time;
 
 /// 构建CSV记录
 ///
-/// 将导航流程、轮次和大流程信息转换为CSV记录
+/// 将导航流程和轮次信息转换为CSV记录
 ///
 /// # 参数
 /// * `flows` - 导航流程切片
 /// * `rounds` - 轮次切片
-/// * `major_flows` - 大流程切片
 /// * `t0` - 起始时间戳（用于计算相对时间）
 ///
 /// # 返回
 /// CSV记录向量
-pub fn build_csv_records(
-    flows: &[NavigationFlow],
-    rounds: &[Round],
-    major_flows: &[MajorFlow],
-    t0: f64,
-) -> Vec<CsvRecord> {
+pub fn build_csv_records(flows: &[NavigationFlow], rounds: &[Round], t0: f64) -> Vec<CsvRecord> {
     let mut records = Vec::new();
-
-    // 创建轮次ID到大流程ID的映射
-    let mut round_to_major_flow: HashMap<usize, usize> = HashMap::new();
-    for major_flow in major_flows {
-        for round in &major_flow.rounds {
-            round_to_major_flow.insert(round.id, major_flow.id);
-        }
-    }
 
     for (flow_id, flow) in flows.iter().enumerate() {
         let flow_id = flow_id + 1;
@@ -49,9 +33,7 @@ pub fn build_csv_records(
         };
 
         // Navigation record
-        let major_flow_id = round_to_major_flow.get(&flow.round_id).copied();
         records.push(CsvRecord {
-            major_flow_id,
             round_id: flow.round_id,
             round_start_rel_s: round_info
                 .map(|r| (r.start_ts - t0) * 1000.0)
@@ -87,9 +69,7 @@ pub fn build_csv_records(
                 _ => None,
             };
 
-            let major_flow_id = round_to_major_flow.get(&flow.round_id).copied();
             records.push(CsvRecord {
-                major_flow_id,
                 round_id: flow.round_id,
                 round_start_rel_s: round_info
                     .map(|r| (r.start_ts - t0) * 1000.0)
@@ -136,120 +116,6 @@ pub fn export_csv(records: &[CsvRecord], outdir: &str) -> Result<()> {
     wtr.flush()?;
     // 静默输出，避免在 TUI 模式下刷屏
     // println!("CSV exported to {}/analysis.csv", outdir);
-    Ok(())
-}
-
-/// 导出大流程统计信息到CSV
-///
-/// # 参数
-/// * `major_flows` - 大流程切片
-/// * `outdir` - 输出目录
-/// * `t0` - 起始时间戳
-/// * `t_last` - 日志最后时间戳（用于判断流程是否还在运行）
-pub fn export_major_flow_stats(
-    major_flows: &[MajorFlow],
-    outdir: &str,
-    t0: f64,
-    t_last: f64,
-) -> Result<()> {
-    let file_path = format!("{}/major_flow_stats.csv", outdir);
-    let mut wtr = csv::Writer::from_path(&file_path)?;
-
-    // 写入标题行
-    wtr.write_record([
-        "major_flow_id",
-        "status",
-        "is_complete",
-        "num_rounds",
-        "start_time",
-        "end_time",
-        "start_rel_s",
-        "end_rel_s",
-        "total_duration_s",
-        "average_round_duration_s",
-        "failure_point",
-        "round_ids",
-        "round_loop_numbers",
-    ])?;
-
-    // 写入每个大流程的统计信息
-    for major_flow in major_flows {
-        let round_ids: Vec<String> = major_flow.rounds.iter().map(|r| r.id.to_string()).collect();
-        let round_loops: Vec<String> = major_flow
-            .rounds
-            .iter()
-            .map(|r| {
-                r.loop_number
-                    .map_or("N/A".to_string(), |n| format!("循环{}", n))
-            })
-            .collect();
-
-        let status = if major_flow.is_complete {
-            "完整流程(循环1->8)".to_string()
-        } else {
-            "不完整流程".to_string()
-        };
-
-        wtr.write_record(&[
-            major_flow.id.to_string(),
-            status,
-            major_flow.is_complete.to_string(),
-            major_flow.rounds.len().to_string(),
-            timestamp_to_beijing_time(major_flow.start_ts),
-            timestamp_to_beijing_time(major_flow.end_ts),
-            format!("{:.3}", major_flow.start_ts - t0),
-            format!("{:.3}", major_flow.end_ts - t0),
-            format!("{:.3}", major_flow.duration_s),
-            format!("{:.3}", major_flow.average_round_duration_s),
-            major_flow
-                .failure_point
-                .clone()
-                .unwrap_or_else(|| "N/A".to_string()),
-            round_ids.join(","),
-            round_loops.join(","),
-        ])?;
-    }
-
-    wtr.flush()?;
-    // 静默输出，避免在 TUI 模式下刷屏
-    // println!("Major flow statistics exported to {}", file_path);
-
-    // 导出简单的大流程时间汇总文件（每行一个大流程时间）
-    let summary_path = format!("{}/major_flow_time_summary.txt", outdir);
-    let mut summary = Vec::new();
-
-    for major_flow in major_flows {
-        let status = if major_flow.is_complete {
-            "完整  "
-        } else {
-            "不完整"
-        };
-
-        // 检查流程是否还在运行（结束时间等于日志最后时间戳）
-        // 允许0.1秒的误差
-        let end_time_str = if (major_flow.end_ts - t_last).abs() < 0.1 {
-            "--".to_string()
-        } else {
-            timestamp_to_beijing_time(major_flow.end_ts)
-        };
-
-        let line = format!(
-            "大流程{:>2} | {} | {:>7.2}秒 | 平均{:>6.2}秒/轮 | {:>2}个轮次 | {} -> {}",
-            major_flow.id,
-            status,
-            major_flow.duration_s,
-            major_flow.average_round_duration_s,
-            major_flow.rounds.len(),
-            timestamp_to_beijing_time(major_flow.start_ts),
-            end_time_str
-        );
-        summary.push(line);
-    }
-
-    std::fs::write(&summary_path, summary.join("\n"))?;
-    // 静默输出，避免在 TUI 模式下刷屏
-    // println!("Major flow time summary exported to {}", summary_path);
-
     Ok(())
 }
 

@@ -1,18 +1,21 @@
 //! 轮次检测模块
 //!
-//! 本模块负责从日志中检测任务轮次和大流程
+//! 本模块负责从日志中检测任务轮次
 //!
-//! 新主控架构支持三种循环类型：
-//! - 初始循环：`[层级 X] ===== 初始循环开始（气密设备为空）=====`
-//! - 常规循环：`[层级 X] 常规循环 N`
-//! - 最终循环：`[层级 X] 最终循环：取出气密工件并放置`
+//! 日志格式：
+//! - 初始循环开始: `[初始循环] ===== 初始循环开始（气密设备为空）=====`
+//! - 初始循环完成: `[初始循环] 初始循环完成，气密设备中有工件`
+//! - 常规循环开始: `[常规循环] 常规循环 N`
+//! - 常规循环完成: `[常规循环] 常规循环 N 放置完成`
+//! - 最终循环开始: `[最终循环] 最终循环：取出气密工件并放置`
+//! - 最终循环完成: `[最终循环] 最终循环完成`
 
 use anyhow::Result;
 use regex::Regex;
 
-use crate::models::{CycleType, LogLine, MajorFlow, Round};
+use crate::models::{CycleType, LogLine, PauseEvent, Round};
 
-/// 检测日志中的任务轮次（新主控架构）
+/// 检测日志中的任务轮次
 ///
 /// 基于循环标记自动检测任务轮次，支持三种循环类型：
 /// - 初始循环：气密设备为空时执行
@@ -26,35 +29,34 @@ use crate::models::{CycleType, LogLine, MajorFlow, Round};
 /// # 返回
 /// 包含所有检测到的轮次的向量
 pub fn detect_rounds(lines: &[LogLine], t_last: f64) -> Result<Vec<Round>> {
-    // 新主控架构的循环标记格式
-    // 初始循环开始: [层级 X] ===== 初始循环开始（气密设备为空）=====
-    let init_start_regex =
-        Regex::new(r"\[层级\s*(\d+)\]\s*=+\s*初始循环开始（气密设备为空）\s*=+")?;
-    // 初始循环完成: [层级 X] 初始循环完成，气密设备中有工件
-    let init_end_regex = Regex::new(r"\[层级\s*(\d+)\]\s*初始循环完成，气密设备中有工件")?;
+    // 初始循环开始: [初始循环] ===== 初始循环开始（气密设备为空）=====
+    let init_start_regex = Regex::new(r"\[初始循环\]\s*=+\s*初始循环开始（气密设备为空）\s*=+")?;
+    // 初始循环完成: [初始循环] 初始循环完成，气密设备中有工件
+    let init_end_regex = Regex::new(r"\[初始循环\]\s*初始循环完成，气密设备中有工件")?;
+    // 常规循环开始: [常规循环] 常规循环 N
+    let normal_start_regex = Regex::new(r"\[常规循环\]\s*常规循环\s*(\d+)\s*$")?;
+    // 常规循环完成: [常规循环] 常规循环 N 放置完成
+    let normal_end_regex = Regex::new(r"\[常规循环\]\s*常规循环\s*(\d+)\s*放置完成")?;
+    // 最终循环开始: [最终循环] 最终循环：取出气密工件并放置
+    let final_start_regex = Regex::new(r"\[最终循环\]\s*最终循环：取出气密工件并放置")?;
+    // 最终循环完成: [最终循环] 最终循环完成
+    let final_end_regex = Regex::new(r"\[最终循环\]\s*最终循环完成")?;
 
-    // 常规循环开始: [层级 X] 常规循环 N
-    let normal_start_regex = Regex::new(r"\[层级\s*(\d+)\]\s*常规循环\s*(\d+)\s*$")?;
-    // 常规循环完成: [层级 X] 常规循环 N 完成
-    let normal_end_regex = Regex::new(r"\[层级\s*(\d+)\]\s*常规循环\s*(\d+)\s*完成")?;
-
-    // 最终循环开始: [层级 X] 最终循环：取出气密工件并放置
-    let final_start_regex = Regex::new(r"\[层级\s*(\d+)\]\s*最终循环：取出气密工件并放置")?;
-    // 最终循环完成: [层级 X] 最终循环完成
-    let final_end_regex = Regex::new(r"\[层级\s*(\d+)\]\s*最终循环完成")?;
-
-    // 旧格式兼容：循环N: 开始循环N
-    let legacy_loop_regex = Regex::new(r"\[发布日志节点\]:\s*\[INFO\]\s*循环(\d+):\s*开始循环\d+")?;
+    // 姿态信息
     let pose_regex = Regex::new(r"\[master_control\]:\s*姿态字符串:\s*(\{.*\})")?;
+
+    // 暂停检测: 循环节点 main_loop: 检测到暂停标志，暂停等待恢复
+    let pause_regex = Regex::new(r"循环节点 main_loop: 检测到暂停标志，暂停等待恢复")?;
+    // 恢复检测: 恢复任务图: ...（从 PauseTaskNode 内部暂停恢复）
+    let resume_regex = Regex::new(r"恢复任务图:.*（从 PauseTaskNode 内部暂停恢复）")?;
 
     let mut rounds = Vec::new();
     let mut current: Option<Round> = None;
+    let mut pending_pause_ts: Option<f64> = None; // 待匹配恢复的暂停时间戳
 
     for line in lines {
         // 检测初始循环开始
-        if let Some(caps) = init_start_regex.captures(&line.line) {
-            let layer_index = caps[1].parse::<u32>().unwrap_or(0);
-
+        if init_start_regex.is_match(&line.line) {
             // 如果当前有进行中的轮次，先结束它
             if let Some(mut round) = current.take() {
                 if round.end_ts.is_none() {
@@ -69,11 +71,12 @@ pub fn detect_rounds(lines: &[LogLine], t_last: f64) -> Result<Vec<Round>> {
                 id,
                 loop_number: Some(0), // 初始循环用0表示
                 cycle_type: CycleType::Initial,
-                layer_index,
+                layer_index: 0,
                 start_ts: line.timestamp,
                 end_ts: None,
                 pose0: None,
                 pose6: None,
+                pause_events: Vec::new(),
             });
             continue;
         }
@@ -91,8 +94,7 @@ pub fn detect_rounds(lines: &[LogLine], t_last: f64) -> Result<Vec<Round>> {
 
         // 检测常规循环开始
         if let Some(caps) = normal_start_regex.captures(&line.line) {
-            let layer_index = caps[1].parse::<u32>().unwrap_or(0);
-            let cycle_number = caps[2].parse::<u32>().unwrap_or(1);
+            let cycle_number = caps[1].parse::<u32>().unwrap_or(1);
 
             // 如果当前有进行中的轮次，先结束它
             if let Some(mut round) = current.take() {
@@ -108,18 +110,19 @@ pub fn detect_rounds(lines: &[LogLine], t_last: f64) -> Result<Vec<Round>> {
                 id,
                 loop_number: Some(cycle_number),
                 cycle_type: CycleType::Normal(cycle_number),
-                layer_index,
+                layer_index: 0,
                 start_ts: line.timestamp,
                 end_ts: None,
                 pose0: None,
                 pose6: None,
+                pause_events: Vec::new(),
             });
             continue;
         }
 
         // 检测常规循环完成
         if let Some(caps) = normal_end_regex.captures(&line.line) {
-            let cycle_number = caps[2].parse::<u32>().unwrap_or(1);
+            let cycle_number = caps[1].parse::<u32>().unwrap_or(1);
             if let Some(ref mut round) = current {
                 if matches!(round.cycle_type, CycleType::Normal(n) if n == cycle_number) {
                     round.end_ts = Some(line.timestamp);
@@ -130,9 +133,7 @@ pub fn detect_rounds(lines: &[LogLine], t_last: f64) -> Result<Vec<Round>> {
         }
 
         // 检测最终循环开始
-        if let Some(caps) = final_start_regex.captures(&line.line) {
-            let layer_index = caps[1].parse::<u32>().unwrap_or(0);
-
+        if final_start_regex.is_match(&line.line) {
             // 如果当前有进行中的轮次，先结束它
             if let Some(mut round) = current.take() {
                 if round.end_ts.is_none() {
@@ -147,11 +148,12 @@ pub fn detect_rounds(lines: &[LogLine], t_last: f64) -> Result<Vec<Round>> {
                 id,
                 loop_number: Some(999), // 最终循环用999表示
                 cycle_type: CycleType::Final,
-                layer_index,
+                layer_index: 0,
                 start_ts: line.timestamp,
                 end_ts: None,
                 pose0: None,
                 pose6: None,
+                pause_events: Vec::new(),
             });
             continue;
         }
@@ -167,31 +169,23 @@ pub fn detect_rounds(lines: &[LogLine], t_last: f64) -> Result<Vec<Round>> {
             continue;
         }
 
-        // 旧格式兼容检测
-        if let Some(caps) = legacy_loop_regex.captures(&line.line) {
-            let loop_number = caps[1].parse::<u32>().ok();
+        // 检测暂停事件
+        if pause_regex.is_match(&line.line) {
+            pending_pause_ts = Some(line.timestamp);
+            continue;
+        }
 
-            // 如果当前有进行中的轮次，先结束它
-            if let Some(mut round) = current.take() {
-                if round.end_ts.is_none() {
-                    round.end_ts = Some(line.timestamp);
+        // 检测恢复事件
+        if resume_regex.is_match(&line.line) {
+            if let Some(pause_ts) = pending_pause_ts.take() {
+                // 将暂停事件添加到当前轮次
+                if let Some(ref mut round) = current {
+                    round.pause_events.push(PauseEvent {
+                        pause_ts,
+                        resume_ts: Some(line.timestamp),
+                    });
                 }
-                rounds.push(round);
             }
-
-            // 开始新的轮次（旧格式，作为常规循环处理）
-            let id = rounds.len() + 1;
-            let cycle_num = loop_number.unwrap_or(1);
-            current = Some(Round {
-                id,
-                loop_number,
-                cycle_type: CycleType::Normal(cycle_num),
-                layer_index: 0,
-                start_ts: line.timestamp,
-                end_ts: None,
-                pose0: None,
-                pose6: None,
-            });
             continue;
         }
 
@@ -216,167 +210,6 @@ pub fn detect_rounds(lines: &[LogLine], t_last: f64) -> Result<Vec<Round>> {
     }
 
     Ok(rounds)
-}
-
-/// 检测大流程（从循环1到循环8为一个完整流程）
-///
-/// # 参数
-/// * `rounds` - 轮次切片
-///
-/// # 返回
-/// 包含所有检测到的大流程的向量
-pub fn detect_major_flows(rounds: &[Round]) -> Vec<MajorFlow> {
-    let mut major_flows = Vec::new();
-    let mut current_flow_rounds: Vec<Round> = Vec::new();
-
-    for round in rounds {
-        // 如果有循环编号信息
-        if let Some(loop_num) = round.loop_number {
-            // 跳过循环5（通常是空闲或等待轮次）
-            if loop_num == 5 {
-                // 如果当前有流程在进行，先保存它
-                if !current_flow_rounds.is_empty() {
-                    let start_ts = current_flow_rounds.first().unwrap().start_ts;
-                    let end_ts = current_flow_rounds
-                        .last()
-                        .unwrap()
-                        .end_ts
-                        .unwrap_or(current_flow_rounds.last().unwrap().start_ts);
-                    let duration_s = end_ts - start_ts;
-                    let num_rounds = current_flow_rounds.len() as f64;
-                    let average_round_duration_s = duration_s / num_rounds;
-                    let last_loop = current_flow_rounds
-                        .last()
-                        .and_then(|r| r.loop_number)
-                        .map(|n| format!("循环{}", n))
-                        .unwrap_or_else(|| "未知".to_string());
-
-                    major_flows.push(MajorFlow {
-                        id: major_flows.len() + 1,
-                        rounds: current_flow_rounds.clone(),
-                        start_ts,
-                        end_ts,
-                        duration_s,
-                        average_round_duration_s,
-                        is_complete: false, // 遇到循环5，流程中断
-                        failure_point: Some(format!("中断于{}", last_loop)),
-                    });
-
-                    // 清空，准备新流程
-                    current_flow_rounds.clear();
-                }
-                // 跳过循环5，不加入任何流程
-                continue;
-            }
-
-            // 先检测是否为新流程开始（循环1）
-            if loop_num == 1 && !current_flow_rounds.is_empty() {
-                // 遇到新的循环1，且之前已有轮次（但未达到循环8），说明上一个流程不完整
-                // 保存不完整的流程（包括单轮次流程）
-                if current_flow_rounds.len() >= 1 {
-                    let start_ts = current_flow_rounds.first().unwrap().start_ts;
-                    let end_ts = current_flow_rounds
-                        .last()
-                        .unwrap()
-                        .end_ts
-                        .unwrap_or(current_flow_rounds.last().unwrap().start_ts);
-                    let duration_s = end_ts - start_ts;
-                    let num_rounds = current_flow_rounds.len() as f64;
-                    let average_round_duration_s = duration_s / num_rounds;
-                    let last_loop = current_flow_rounds
-                        .last()
-                        .and_then(|r| r.loop_number)
-                        .map(|n| format!("循环{}", n))
-                        .unwrap_or_else(|| "未知".to_string());
-
-                    major_flows.push(MajorFlow {
-                        id: major_flows.len() + 1,
-                        rounds: current_flow_rounds.clone(),
-                        start_ts,
-                        end_ts,
-                        duration_s,
-                        average_round_duration_s,
-                        is_complete: false, // 未到达循环8，不完整流程
-                        failure_point: Some(format!("中断于{}", last_loop)),
-                    });
-                }
-
-                // 清空，准备新流程
-                current_flow_rounds.clear();
-            }
-
-            // 将当前轮次加入流程
-            current_flow_rounds.push(round.clone());
-
-            // 检测是否达到循环8（完整流程结束）
-            if loop_num == 8 {
-                // 创建完整大流程
-                if !current_flow_rounds.is_empty() {
-                    let start_ts = current_flow_rounds.first().unwrap().start_ts;
-                    let end_ts = current_flow_rounds
-                        .last()
-                        .unwrap()
-                        .end_ts
-                        .unwrap_or(current_flow_rounds.last().unwrap().start_ts);
-                    let duration_s = end_ts - start_ts;
-
-                    // 对于完整流程（包含循环8），平均时间为总时间除以8
-                    let average_round_duration_s = duration_s / 8.0;
-
-                    major_flows.push(MajorFlow {
-                        id: major_flows.len() + 1,
-                        rounds: current_flow_rounds.clone(),
-                        start_ts,
-                        end_ts,
-                        duration_s,
-                        average_round_duration_s,
-                        is_complete: true, // 到达循环8，是完整流程
-                        failure_point: None,
-                    });
-
-                    // 清空当前流程的轮次，准备下一个流程
-                    current_flow_rounds.clear();
-                }
-            }
-        }
-    }
-
-    // 处理最后的未完成流程（包括单轮次流程）
-    if !current_flow_rounds.is_empty() {
-        let start_ts = current_flow_rounds.first().unwrap().start_ts;
-        let end_ts = current_flow_rounds
-            .last()
-            .unwrap()
-            .end_ts
-            .unwrap_or(current_flow_rounds.last().unwrap().start_ts);
-        let duration_s = end_ts - start_ts;
-        let num_rounds = current_flow_rounds.len() as f64;
-        let average_round_duration_s = duration_s / num_rounds;
-
-        let last_loop = current_flow_rounds
-            .last()
-            .and_then(|r| r.loop_number)
-            .map(|n| format!("循环{}", n))
-            .unwrap_or_else(|| "未知".to_string());
-        let is_complete = current_flow_rounds.last().and_then(|r| r.loop_number) == Some(8);
-
-        major_flows.push(MajorFlow {
-            id: major_flows.len() + 1,
-            rounds: current_flow_rounds,
-            start_ts,
-            end_ts,
-            duration_s,
-            average_round_duration_s,
-            is_complete,
-            failure_point: if is_complete {
-                None
-            } else {
-                Some(format!("中断于{}", last_loop))
-            },
-        });
-    }
-
-    major_flows
 }
 
 /// 将时间戳转换为对应的轮次ID

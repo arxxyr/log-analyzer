@@ -99,7 +99,6 @@ enum Commands {
     /// 分析本地或远程文件
     Analyze {
         /// 输入文件（本地路径或远程文件名）
-        #[arg(short, long)]
         input: String,
 
         /// 输出目录

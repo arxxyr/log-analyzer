@@ -22,7 +22,10 @@ fn parse_datetime_to_unix(datetime_str: &str) -> Option<f64> {
     // 格式：2025-12-24 17:16:04.520974
     let naive = NaiveDateTime::parse_from_str(datetime_str, "%Y-%m-%d %H:%M:%S%.f").ok()?;
     let shanghai_time = Shanghai.from_local_datetime(&naive).single()?;
-    Some(shanghai_time.timestamp() as f64 + shanghai_time.timestamp_subsec_micros() as f64 / 1_000_000.0)
+    Some(
+        shanghai_time.timestamp() as f64
+            + shanghai_time.timestamp_subsec_micros() as f64 / 1_000_000.0,
+    )
 }
 
 /// 加载并解析日志文件

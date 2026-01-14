@@ -6,7 +6,6 @@
 //!
 //! - 解析日志文件并提取时间戳信息
 //! - 检测任务轮次（基于循环标记）
-//! - 检测大流程（完整/不完整）
 //! - 分析导航流程和机械臂操作
 //! - 生成 CSV 报告和甘特图
 
@@ -28,9 +27,7 @@ pub mod round_detector;
 pub mod utils;
 
 // 重新导出常用类型
-pub use models::{
-    ActionOperation, CsvRecord, LogLine, MajorFlow, NavigationFlow, Round, SubStep,
-};
+pub use models::{ActionOperation, CsvRecord, LogLine, NavigationFlow, Round, SubStep};
 
 // ============================================================================
 // 插件实现
@@ -81,13 +78,11 @@ impl AnalyzerPlugin for MasterControlAnalyzer {
 ///
 /// 封装了完整的分析流程，从日志解析到结果输出。
 fn run_analysis_internal(input_file: &str, output_dir: &str) -> Result<AnalyzeResult> {
-    use csv_exporter::{
-        build_csv_records, export_csv, export_major_flow_stats, generate_action_timeline_csv,
-    };
+    use csv_exporter::{build_csv_records, export_csv, generate_action_timeline_csv};
     use flow_detector::detect_flows;
     use gantt::generate_gantt_charts;
     use parser::load_log_lines;
-    use round_detector::{detect_major_flows, detect_rounds};
+    use round_detector::detect_rounds;
 
     // 1. 加载日志行
     let lines = load_log_lines(input_file)?;
@@ -102,11 +97,7 @@ fn run_analysis_internal(input_file: &str, output_dir: &str) -> Result<AnalyzeRe
     let rounds = detect_rounds(&lines, t_last)?;
     let round_count = rounds.len();
 
-    // 3. 检测大流程
-    let major_flows = detect_major_flows(&rounds);
-    let major_flow_count = major_flows.len();
-
-    // 4. 检测导航流程
+    // 3. 检测导航流程
     let flows = detect_flows(&lines, &rounds)?;
     let flow_count = flows.len();
 
@@ -133,14 +124,14 @@ fn run_analysis_internal(input_file: &str, output_dir: &str) -> Result<AnalyzeRe
         }
     }
 
-    // 5. 构建CSV记录
-    let records = build_csv_records(&flows, &rounds, &major_flows, t0);
+    // 4. 构建CSV记录
+    let records = build_csv_records(&flows, &rounds, t0);
     let record_count = records.len();
 
-    // 6. 创建输出目录
+    // 5. 创建输出目录
     std::fs::create_dir_all(output_dir)?;
 
-    // 7. 导出所有结果
+    // 6. 导出所有结果
     let mut output_files = Vec::new();
 
     // 导出主分析CSV
@@ -149,14 +140,6 @@ fn run_analysis_internal(input_file: &str, output_dir: &str) -> Result<AnalyzeRe
         path: format!("{}/analysis.csv", output_dir).into(),
         file_type: "csv".into(),
         description: "主分析数据（所有操作的时序记录）".into(),
-    });
-
-    // 导出大流程统计
-    export_major_flow_stats(&major_flows, output_dir, t0, t_last)?;
-    output_files.push(OutputFile {
-        path: format!("{}/major_flow_stats.csv", output_dir).into(),
-        file_type: "csv".into(),
-        description: "大流程统计（完整/不完整流程汇总）".into(),
     });
 
     // 生成甘特图
@@ -190,6 +173,14 @@ fn run_analysis_internal(input_file: &str, output_dir: &str) -> Result<AnalyzeRe
         description: "动作时间轴汇总表".into(),
     });
 
+    // 生成常规循环耗时统计图
+    gantt::generate_cycle_duration_chart(&rounds, output_dir)?;
+    output_files.push(OutputFile {
+        path: format!("{}/cycle_duration_stats.png", output_dir).into(),
+        file_type: "png".into(),
+        description: "常规循环耗时统计图".into(),
+    });
+
     // 8. 构建标准化时间线数据
     let timeline = build_timeline(input_file, &rounds, &flows, t0, t_last)?;
 
@@ -197,13 +188,11 @@ fn run_analysis_internal(input_file: &str, output_dir: &str) -> Result<AnalyzeRe
     let summary = format!(
         "分析完成！\n\
          - 检测到 {} 个轮次\n\
-         - 检测到 {} 个大流程\n\
          - 检测到 {} 个导航流程\n\
          - 动作统计: {} 导航, {} 预打舵, {} 手臂, {} 头部, {} 腰部\n\
          - 生成 {} 条 CSV 记录\n\
          - 输出目录: {}",
         round_count,
-        major_flow_count,
         flow_count,
         nav_count,
         preplan_count,
