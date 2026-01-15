@@ -231,7 +231,7 @@ fn build_timeline(
             track: Track::RoundMarker,
             name: format!("轮次 {}", round.id).into(),
             start_time: round.start_ts,
-            end_time: round.end_ts.map(|t| t.into()).into(),
+            end_time: round.end_ts.into(),
             status: if round.end_ts.is_some() {
                 EventStatus::Success
             } else {

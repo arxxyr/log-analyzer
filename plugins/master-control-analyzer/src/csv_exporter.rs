@@ -7,6 +7,49 @@ use anyhow::Result;
 use crate::models::{CsvRecord, NavigationFlow, Round};
 use crate::utils::timestamp_to_beijing_time;
 
+/// 将时间戳转换为相对时间（毫秒精度截断）
+fn to_rel_time(ts: f64, t0: f64) -> f64 {
+    let rel = (ts - t0) * 1000.0;
+    (rel as u64) as f64 / 1000.0
+}
+
+/// 计算相对时间的持续时间
+fn calc_duration(start: Option<f64>, end: Option<f64>) -> Option<f64> {
+    match (start, end) {
+        (Some(s), Some(e)) => Some(e - s),
+        _ => None,
+    }
+}
+
+/// 从轮次获取时间信息的辅助结构
+struct RoundTimeInfo {
+    start_rel_s: Option<f64>,
+    end_rel_s: Option<f64>,
+    duration_s: Option<f64>,
+}
+
+impl RoundTimeInfo {
+    fn from_round(round: Option<&Round>, t0: f64) -> Self {
+        match round {
+            Some(r) => {
+                let start_rel = to_rel_time(r.start_ts, t0);
+                let end_rel = r.end_ts.map(|ts| to_rel_time(ts, t0));
+                let duration = r.end_ts.map(|end| to_rel_time(end - r.start_ts, 0.0));
+                Self {
+                    start_rel_s: Some(start_rel),
+                    end_rel_s: end_rel,
+                    duration_s: duration,
+                }
+            }
+            None => Self {
+                start_rel_s: None,
+                end_rel_s: None,
+                duration_s: None,
+            },
+        }
+    }
+}
+
 /// 构建CSV记录
 ///
 /// 将导航流程和轮次信息转换为CSV记录
@@ -24,28 +67,18 @@ pub fn build_csv_records(flows: &[NavigationFlow], rounds: &[Round], t0: f64) ->
     for (flow_id, flow) in flows.iter().enumerate() {
         let flow_id = flow_id + 1;
         let round_info = rounds.iter().find(|r| r.id == flow.round_id);
+        let round_time = RoundTimeInfo::from_round(round_info, t0);
 
-        let nav_start_rel = flow.nav_start_ts.map(|ts| ts - t0);
-        let nav_end_rel = flow.nav_end_ts.map(|ts| ts - t0);
-        let nav_duration = match (nav_start_rel, nav_end_rel) {
-            (Some(start), Some(end)) => Some(end - start),
-            _ => None,
-        };
+        let nav_start_rel = flow.nav_start_ts.map(|ts| to_rel_time(ts, t0));
+        let nav_end_rel = flow.nav_end_ts.map(|ts| to_rel_time(ts, t0));
+        let nav_duration = calc_duration(nav_start_rel, nav_end_rel);
 
         // Navigation record
         records.push(CsvRecord {
             round_id: flow.round_id,
-            round_start_rel_s: round_info
-                .map(|r| (r.start_ts - t0) * 1000.0)
-                .map(|x| (x as u64) as f64 / 1000.0),
-            round_end_rel_s: round_info
-                .and_then(|r| r.end_ts)
-                .map(|ts| (ts - t0) * 1000.0)
-                .map(|x| (x as u64) as f64 / 1000.0),
-            round_duration_s: round_info
-                .and_then(|r| r.end_ts)
-                .map(|end_ts| (end_ts - round_info.unwrap().start_ts) * 1000.0)
-                .map(|x| (x as u64) as f64 / 1000.0),
+            round_start_rel_s: round_time.start_rel_s,
+            round_end_rel_s: round_time.end_rel_s,
+            round_duration_s: round_time.duration_s,
             flow_id,
             step_idx: 1,
             step_type: "nav".to_string(),
@@ -54,34 +87,23 @@ pub fn build_csv_records(flows: &[NavigationFlow], rounds: &[Round], t0: f64) ->
             action_type: Some("navigation".to_string()),
             action_code: None,
             action_label: None,
-            start_rel_s: nav_start_rel.map(|x| (x * 1000.0) as u64 as f64 / 1000.0),
-            end_rel_s: nav_end_rel.map(|x| (x * 1000.0) as u64 as f64 / 1000.0),
-            duration_s: nav_duration.map(|x| (x * 1000.0) as u64 as f64 / 1000.0),
+            start_rel_s: nav_start_rel,
+            end_rel_s: nav_end_rel,
+            duration_s: nav_duration,
             status: flow.nav_status.clone(),
         });
 
         // 其他动作记录
         for (op_idx, operation) in flow.operations.iter().enumerate() {
-            let start_rel = operation.start_ts.map(|ts| ts - t0);
-            let end_rel = operation.end_ts.map(|ts| ts - t0);
-            let duration = match (start_rel, end_rel) {
-                (Some(start), Some(end)) => Some(end - start),
-                _ => None,
-            };
+            let start_rel = operation.start_ts.map(|ts| to_rel_time(ts, t0));
+            let end_rel = operation.end_ts.map(|ts| to_rel_time(ts, t0));
+            let duration = calc_duration(start_rel, end_rel);
 
             records.push(CsvRecord {
                 round_id: flow.round_id,
-                round_start_rel_s: round_info
-                    .map(|r| (r.start_ts - t0) * 1000.0)
-                    .map(|x| (x as u64) as f64 / 1000.0),
-                round_end_rel_s: round_info
-                    .and_then(|r| r.end_ts)
-                    .map(|ts| (ts - t0) * 1000.0)
-                    .map(|x| (x as u64) as f64 / 1000.0),
-                round_duration_s: round_info
-                    .and_then(|r| r.end_ts)
-                    .map(|end_ts| (end_ts - round_info.unwrap().start_ts) * 1000.0)
-                    .map(|x| (x as u64) as f64 / 1000.0),
+                round_start_rel_s: round_time.start_rel_s,
+                round_end_rel_s: round_time.end_rel_s,
+                round_duration_s: round_time.duration_s,
                 flow_id,
                 step_idx: op_idx + 2, // Start from 2 since nav is 1
                 step_type: operation.action_type.clone(),
@@ -90,9 +112,9 @@ pub fn build_csv_records(flows: &[NavigationFlow], rounds: &[Round], t0: f64) ->
                 action_type: Some(operation.action_type.clone()),
                 action_code: operation.action_code,
                 action_label: Some(operation.label.clone()),
-                start_rel_s: start_rel.map(|x| (x * 1000.0) as u64 as f64 / 1000.0),
-                end_rel_s: end_rel.map(|x| (x * 1000.0) as u64 as f64 / 1000.0),
-                duration_s: duration.map(|x| (x * 1000.0) as u64 as f64 / 1000.0),
+                start_rel_s: start_rel,
+                end_rel_s: end_rel,
+                duration_s: duration,
                 status: operation.status.clone(),
             });
         }

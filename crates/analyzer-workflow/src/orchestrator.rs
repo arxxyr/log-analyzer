@@ -268,20 +268,15 @@ impl WorkflowOrchestrator {
             }
 
             // 确定该分析器使用的远程日志目录
-            let effective_log_dir = self.resolve_log_dir_for_analyzer(
-                remote_log_dir.as_ref(),
-                use_latest_date_dir,
-            )?;
+            let effective_log_dir =
+                self.resolve_log_dir_for_analyzer(remote_log_dir.as_ref(), use_latest_date_dir)?;
 
             // 发现文件
             let file_info_result = if self.config.remote.enabled && self.remote_connection.is_some()
             {
                 let connection = self.remote_connection.as_mut().unwrap();
-                self.discoverer.discover_and_select_remote(
-                    connection,
-                    &effective_log_dir,
-                    pattern,
-                )
+                self.discoverer
+                    .discover_and_select_remote(connection, &effective_log_dir, pattern)
             } else {
                 self.discoverer
                     .discover_and_select_local(&self.config.local.log_dir, pattern)

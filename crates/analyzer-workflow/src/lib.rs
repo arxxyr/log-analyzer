@@ -10,5 +10,7 @@ pub mod selector;
 // 重新导出常用类型
 pub use config::{AnalyzerConfig, AnalyzerMapping, ConfigError};
 pub use discoverer::{DiscovererError, FileDiscoverer, FileInfo};
-pub use orchestrator::{AnalysisTask, WorkflowError, WorkflowOrchestrator, WorkflowResult, WorkflowStep};
+pub use orchestrator::{
+    AnalysisTask, WorkflowError, WorkflowOrchestrator, WorkflowResult, WorkflowStep,
+};
 pub use selector::PluginSelector;

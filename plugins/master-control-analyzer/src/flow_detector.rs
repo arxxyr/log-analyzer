@@ -26,11 +26,56 @@
 //! - preplan: 预打舵
 //! - behavior_tree: BehaviorTree 节点（包含多个子动作）
 
+use std::collections::HashMap;
+
 use anyhow::Result;
 use regex::Regex;
 
 use crate::models::{ActionOperation, LogLine, NavigationFlow, Round, SubStep};
 use crate::round_detector::ts_to_round_id;
+
+/// 为指定类型的未完成 adapter 动作添加子步骤
+fn add_substep_to_adapter(
+    adapters: &mut HashMap<String, ActionOperation>,
+    adapter_type: &str,
+    step_name: String,
+    timestamp: f64,
+) {
+    if let Some((_, action)) = adapters
+        .iter_mut()
+        .filter(|(k, a)| k.starts_with(adapter_type) && a.end_ts.is_none())
+        .max_by(|(_, a1), (_, a2)| a1.start_ts.partial_cmp(&a2.start_ts).unwrap())
+    {
+        action.sub_steps.push(SubStep {
+            name: step_name,
+            timestamp,
+        });
+    }
+}
+
+/// 在当前 BT 节点上下文中，更新最近的指定类型子动作
+fn update_bt_subaction<F>(bt_node: &mut Option<BtNodeContext>, action_type: &str, mut updater: F)
+where
+    F: FnMut(&mut ActionOperation),
+{
+    if let Some(ctx) = bt_node {
+        for action in ctx.sub_actions.iter_mut().rev() {
+            if action.action_type == action_type && action.end_ts.is_none() {
+                updater(action);
+                break;
+            }
+        }
+    }
+}
+
+/// BehaviorTree 节点上下文
+#[derive(Debug)]
+struct BtNodeContext {
+    node_id: String,
+    action_code: Option<u32>,
+    start_ts: f64,
+    sub_actions: Vec<ActionOperation>,
+}
 
 /// 检测日志中的导航流程和动作操作
 ///
@@ -149,7 +194,8 @@ pub fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<Navigatio
     // arm_transition_point 完成: 匹配任意 "custom done" 格式
     // - custom done reference_state_n=... (ik=0)
     // - custom done resp_status=... (ik=1)
-    let arm_transition_done_regex = Regex::new(r"custom done (?:resp_status=(\d+)|reference_state_n=)")?;
+    let arm_transition_done_regex =
+        Regex::new(r"custom done (?:resp_status=(\d+)|reference_state_n=)")?;
     // arm_move start cmd=xxx
     let arm_move_start_regex = Regex::new(r"arm_move start cmd=(\d+)")?;
     // arm_move response: success cmd=xxx / result code=xxx
@@ -160,18 +206,9 @@ pub fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<Navigatio
     let mut current_flow: Option<NavigationFlow> = None;
 
     // 活跃的 ROS2ActionAdapter 动作（按类型跟踪）
-    // 用于新格式日志的动作跟踪
-    let mut active_adapters: std::collections::HashMap<String, ActionOperation> =
-        std::collections::HashMap::new();
+    let mut active_adapters: HashMap<String, ActionOperation> = HashMap::new();
 
     // 活跃的 BehaviorTree 节点
-    #[derive(Debug)]
-    struct BtNodeContext {
-        node_id: String,
-        action_code: Option<u32>,
-        start_ts: f64,
-        sub_actions: Vec<ActionOperation>,
-    }
     let mut active_bt_node: Option<BtNodeContext> = None;
     // 活跃的 BT 子动作（用于跟踪中间模块）
     let mut active_bt_subaction: Option<(String, f64)> = None; // (module_name, start_ts)
@@ -321,18 +358,13 @@ pub fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<Navigatio
         if let Some(caps) = gripper_request_regex.captures(&line.line) {
             let cmd = caps[1].to_string();
             let arm = caps[2].to_string();
-            if let Some(ref mut ctx) = active_bt_node {
-                // 为最近的 gripper 动作添加子步骤
-                for action in ctx.sub_actions.iter_mut().rev() {
-                    if action.action_type == "gripper" && action.end_ts.is_none() {
-                        action.sub_steps.push(SubStep {
-                            name: format!("gripper request cmd={} arm={}", cmd, arm),
-                            timestamp: line.timestamp,
-                        });
-                        break;
-                    }
-                }
-            }
+            let ts = line.timestamp;
+            update_bt_subaction(&mut active_bt_node, "gripper", |action| {
+                action.sub_steps.push(SubStep {
+                    name: format!("gripper request cmd={} arm={}", cmd, arm),
+                    timestamp: ts,
+                });
+            });
             continue;
         }
 
@@ -340,19 +372,15 @@ pub fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<Navigatio
         if let Some(caps) = gripper_done_regex.captures(&line.line) {
             let status = caps[1].to_string();
             let cost_ms: u32 = caps[2].parse().unwrap_or(0);
-            if let Some(ref mut ctx) = active_bt_node {
-                for action in ctx.sub_actions.iter_mut().rev() {
-                    if action.action_type == "gripper" && action.end_ts.is_none() {
-                        action.sub_steps.push(SubStep {
-                            name: format!("gripper done ({}ms)", cost_ms),
-                            timestamp: line.timestamp,
-                        });
-                        action.end_ts = Some(line.timestamp);
-                        action.status = status.clone();
-                        break;
-                    }
-                }
-            }
+            let ts = line.timestamp;
+            update_bt_subaction(&mut active_bt_node, "gripper", |action| {
+                action.sub_steps.push(SubStep {
+                    name: format!("gripper done ({}ms)", cost_ms),
+                    timestamp: ts,
+                });
+                action.end_ts = Some(ts);
+                action.status = status.clone();
+            });
             continue;
         }
 
@@ -448,35 +476,27 @@ pub fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<Navigatio
         // DetObjPose 响应
         if let Some(caps) = det_obj_pose_response_regex.captures(&line.line) {
             let ret = caps[1].to_string();
-            if let Some(ref mut ctx) = active_bt_node {
-                for action in ctx.sub_actions.iter_mut().rev() {
-                    if action.action_type == "det_obj_pose" && action.end_ts.is_none() {
-                        action.sub_steps.push(SubStep {
-                            name: format!("DetObjPose response ret={}", ret),
-                            timestamp: line.timestamp,
-                        });
-                        break;
-                    }
-                }
-            }
+            let ts = line.timestamp;
+            update_bt_subaction(&mut active_bt_node, "det_obj_pose", |action| {
+                action.sub_steps.push(SubStep {
+                    name: format!("DetObjPose response ret={}", ret),
+                    timestamp: ts,
+                });
+            });
             continue;
         }
 
         // DetObjPose 完成
         if det_obj_pose_done_regex.is_match(&line.line) {
-            if let Some(ref mut ctx) = active_bt_node {
-                for action in ctx.sub_actions.iter_mut().rev() {
-                    if action.action_type == "det_obj_pose" && action.end_ts.is_none() {
-                        action.sub_steps.push(SubStep {
-                            name: "DetObjPose done".to_string(),
-                            timestamp: line.timestamp,
-                        });
-                        action.end_ts = Some(line.timestamp);
-                        action.status = "ok".to_string();
-                        break;
-                    }
-                }
-            }
+            let ts = line.timestamp;
+            update_bt_subaction(&mut active_bt_node, "det_obj_pose", |action| {
+                action.sub_steps.push(SubStep {
+                    name: "DetObjPose done".to_string(),
+                    timestamp: ts,
+                });
+                action.end_ts = Some(ts);
+                action.status = "ok".to_string();
+            });
             continue;
         }
 
@@ -506,23 +526,19 @@ pub fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<Navigatio
         // ArmObstacle 完成
         if let Some(caps) = arm_obstacle_done_regex.captures(&line.line) {
             let status = caps[1].to_string();
-            if let Some(ref mut ctx) = active_bt_node {
-                for action in ctx.sub_actions.iter_mut().rev() {
-                    if action.action_type == "obstacle" && action.end_ts.is_none() {
-                        action.sub_steps.push(SubStep {
-                            name: format!("ArmObstacle done status={}", status),
-                            timestamp: line.timestamp,
-                        });
-                        action.end_ts = Some(line.timestamp);
-                        action.status = if status == "0" {
-                            "ok".to_string()
-                        } else {
-                            format!("status_{}", status)
-                        };
-                        break;
-                    }
-                }
-            }
+            let ts = line.timestamp;
+            update_bt_subaction(&mut active_bt_node, "obstacle", |action| {
+                action.sub_steps.push(SubStep {
+                    name: format!("ArmObstacle done status={}", status),
+                    timestamp: ts,
+                });
+                action.end_ts = Some(ts);
+                action.status = if status == "0" {
+                    "ok".to_string()
+                } else {
+                    format!("status_{}", status)
+                };
+            });
             continue;
         }
 
@@ -550,23 +566,19 @@ pub fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<Navigatio
         if let Some(caps) = arm_transition_done_regex.captures(&line.line) {
             // caps[1] 可能为空（当匹配 reference_state_n= 时）
             let status = caps.get(1).map(|m| m.as_str()).unwrap_or("0").to_string();
-            if let Some(ref mut ctx) = active_bt_node {
-                for action in ctx.sub_actions.iter_mut().rev() {
-                    if action.action_type == "transition" && action.end_ts.is_none() {
-                        action.sub_steps.push(SubStep {
-                            name: format!("transition done status={}", status),
-                            timestamp: line.timestamp,
-                        });
-                        action.end_ts = Some(line.timestamp);
-                        action.status = if status == "0" {
-                            "ok".to_string()
-                        } else {
-                            format!("status_{}", status)
-                        };
-                        break;
-                    }
-                }
-            }
+            let ts = line.timestamp;
+            update_bt_subaction(&mut active_bt_node, "transition", |action| {
+                action.sub_steps.push(SubStep {
+                    name: format!("transition done status={}", status),
+                    timestamp: ts,
+                });
+                action.end_ts = Some(ts);
+                action.status = if status == "0" {
+                    "ok".to_string()
+                } else {
+                    format!("status_{}", status)
+                };
+            });
             continue;
         }
 
@@ -592,19 +604,15 @@ pub fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<Navigatio
 
         // arm_move 响应
         if arm_move_response_regex.is_match(&line.line) {
-            if let Some(ref mut ctx) = active_bt_node {
-                for action in ctx.sub_actions.iter_mut().rev() {
-                    if action.action_type == "arm_move" && action.end_ts.is_none() {
-                        action.sub_steps.push(SubStep {
-                            name: "arm_move response".to_string(),
-                            timestamp: line.timestamp,
-                        });
-                        action.end_ts = Some(line.timestamp);
-                        action.status = "ok".to_string();
-                        break;
-                    }
-                }
-            }
+            let ts = line.timestamp;
+            update_bt_subaction(&mut active_bt_node, "arm_move", |action| {
+                action.sub_steps.push(SubStep {
+                    name: "arm_move response".to_string(),
+                    timestamp: ts,
+                });
+                action.end_ts = Some(ts);
+                action.status = "ok".to_string();
+            });
             continue;
         }
 
@@ -756,66 +764,48 @@ pub fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<Navigatio
         if let Some(caps) = adapter_wait_regex.captures(&line.line) {
             let adapter_type = caps[1].to_string();
             let server_name = caps[2].to_string();
-            // 找最近开始的匹配类型的未完成动作
-            if let Some((_, action)) = active_adapters
-                .iter_mut()
-                .filter(|(k, a)| k.starts_with(&adapter_type) && a.end_ts.is_none())
-                .max_by(|(_, a1), (_, a2)| a1.start_ts.partial_cmp(&a2.start_ts).unwrap())
-            {
-                action.sub_steps.push(SubStep {
-                    name: format!("等待服务器 '{}'...", server_name),
-                    timestamp: line.timestamp,
-                });
-            }
+            add_substep_to_adapter(
+                &mut active_adapters,
+                &adapter_type,
+                format!("等待服务器 '{}'...", server_name),
+                line.timestamp,
+            );
             continue;
         }
 
         // ROS2ActionAdapter 服务器已就绪
         if let Some(caps) = adapter_ready_regex.captures(&line.line) {
             let adapter_type = caps[1].to_string();
-            if let Some((_, action)) = active_adapters
-                .iter_mut()
-                .filter(|(k, a)| k.starts_with(&adapter_type) && a.end_ts.is_none())
-                .max_by(|(_, a1), (_, a2)| a1.start_ts.partial_cmp(&a2.start_ts).unwrap())
-            {
-                action.sub_steps.push(SubStep {
-                    name: "服务器已就绪".to_string(),
-                    timestamp: line.timestamp,
-                });
-            }
+            add_substep_to_adapter(
+                &mut active_adapters,
+                &adapter_type,
+                "服务器已就绪".to_string(),
+                line.timestamp,
+            );
             continue;
         }
 
         // ROS2ActionAdapter 发送目标
         if let Some(caps) = adapter_send_regex.captures(&line.line) {
             let adapter_type = caps[1].to_string();
-            if let Some((_, action)) = active_adapters
-                .iter_mut()
-                .filter(|(k, a)| k.starts_with(&adapter_type) && a.end_ts.is_none())
-                .max_by(|(_, a1), (_, a2)| a1.start_ts.partial_cmp(&a2.start_ts).unwrap())
-            {
-                action.sub_steps.push(SubStep {
-                    name: "发送目标".to_string(),
-                    timestamp: line.timestamp,
-                });
-            }
+            add_substep_to_adapter(
+                &mut active_adapters,
+                &adapter_type,
+                "发送目标".to_string(),
+                line.timestamp,
+            );
             continue;
         }
 
         // ROS2ActionAdapter 响应（目标被接受，开始执行）
         if let Some(caps) = adapter_response_regex.captures(&line.line) {
             let adapter_type = caps[1].to_string();
-            // 找匹配类型的最近开始的未完成动作
-            if let Some((_, action)) = active_adapters
-                .iter_mut()
-                .filter(|(k, a)| k.starts_with(&adapter_type) && a.end_ts.is_none())
-                .max_by(|(_, a1), (_, a2)| a1.start_ts.partial_cmp(&a2.start_ts).unwrap())
-            {
-                action.sub_steps.push(SubStep {
-                    name: "执行中".to_string(),
-                    timestamp: line.timestamp,
-                });
-            }
+            add_substep_to_adapter(
+                &mut active_adapters,
+                &adapter_type,
+                "执行中".to_string(),
+                line.timestamp,
+            );
             continue;
         }
 
@@ -823,17 +813,12 @@ pub fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<Navigatio
         if let Some(caps) = adapter_result_regex.captures(&line.line) {
             let adapter_type = caps[1].to_string();
             let success = caps[2].to_string();
-            // 找匹配类型的最近开始的未完成动作
-            if let Some((_, action)) = active_adapters
-                .iter_mut()
-                .filter(|(k, a)| k.starts_with(&adapter_type) && a.end_ts.is_none())
-                .max_by(|(_, a1), (_, a2)| a1.start_ts.partial_cmp(&a2.start_ts).unwrap())
-            {
-                action.sub_steps.push(SubStep {
-                    name: format!("[RESULT] 完成，成功: {}", success),
-                    timestamp: line.timestamp,
-                });
-            }
+            add_substep_to_adapter(
+                &mut active_adapters,
+                &adapter_type,
+                format!("[RESULT] 完成，成功: {}", success),
+                line.timestamp,
+            );
             continue;
         }
 

@@ -12,6 +12,188 @@ use crate::font_loader::FontLoader;
 use crate::models::{NavigationFlow, Round, SubStep};
 use crate::utils::timestamp_to_beijing_time;
 
+/// 动作类型配置（顺序、显示名称、颜色）
+const ACTION_TYPE_CONFIG: &[(&str, &str, RGBColor)] = &[
+    ("navigation", "导航", RGBColor(173, 216, 230)), // 浅蓝色
+    ("preplan", "预打舵", RGBColor(255, 255, 150)),  // 浅黄色
+    ("arm", "手臂", RGBColor(144, 238, 144)),        // 浅绿色
+    ("head", "头部", RGBColor(255, 218, 185)),       // 浅橙色
+    ("waist", "腰部", RGBColor(221, 160, 221)),      // 浅紫色
+    ("ready_pose", "准备阶段", RGBColor(176, 224, 230)), // 粉蓝色
+    ("det_obj_pose", "目标检测", RGBColor(255, 228, 181)), // 浅黄橙
+    ("obstacle", "障碍物", RGBColor(255, 182, 193)), // 浅粉红
+    ("transition", "过渡点", RGBColor(216, 191, 216)), // 淡紫色
+    ("arm_move", "手臂运动", RGBColor(152, 251, 152)), // 淡绿色
+    ("gripper", "夹爪", RGBColor(240, 230, 140)),    // 卡其色
+];
+
+/// 获取动作类型的颜色
+fn get_action_color(action_type: &str) -> RGBColor {
+    for (type_key, _, color) in ACTION_TYPE_CONFIG {
+        if *type_key == action_type || (action_type == "nav" && *type_key == "navigation") {
+            return *color;
+        }
+    }
+    RGBColor(192, 192, 192) // 灰色（默认）
+}
+
+/// 子步骤颜色配置
+struct SubStepColorConfig {
+    pattern: &'static str,
+    color: RGBColor,
+    use_alternating: bool,
+}
+
+/// 子步骤颜色映射表
+const SUBSTEP_COLOR_CONFIG: &[SubStepColorConfig] = &[
+    // BehaviorTree 模块相关
+    SubStepColorConfig {
+        pattern: "GetReadyPose",
+        color: RGBColor(135, 206, 250),
+        use_alternating: true,
+    },
+    SubStepColorConfig {
+        pattern: "DetObjPose",
+        color: RGBColor(255, 228, 181),
+        use_alternating: false,
+    },
+    SubStepColorConfig {
+        pattern: "ArmObstacle",
+        color: RGBColor(255, 182, 193),
+        use_alternating: false,
+    },
+    SubStepColorConfig {
+        pattern: "ModifyArmObstacle",
+        color: RGBColor(255, 182, 193),
+        use_alternating: false,
+    },
+    SubStepColorConfig {
+        pattern: "GetGoalPose",
+        color: RGBColor(152, 251, 152),
+        use_alternating: false,
+    },
+    SubStepColorConfig {
+        pattern: "ArmTransitionPoint",
+        color: RGBColor(216, 191, 216),
+        use_alternating: false,
+    },
+    SubStepColorConfig {
+        pattern: "transition",
+        color: RGBColor(216, 191, 216),
+        use_alternating: false,
+    },
+    SubStepColorConfig {
+        pattern: "ExecuteDoubleArmMove",
+        color: RGBColor(152, 251, 152),
+        use_alternating: false,
+    },
+    SubStepColorConfig {
+        pattern: "arm_move",
+        color: RGBColor(152, 251, 152),
+        use_alternating: false,
+    },
+    SubStepColorConfig {
+        pattern: "gripper",
+        color: RGBColor(240, 230, 140),
+        use_alternating: false,
+    },
+    SubStepColorConfig {
+        pattern: "节点开始",
+        color: RGBColor(100, 149, 237),
+        use_alternating: false,
+    },
+    SubStepColorConfig {
+        pattern: "节点结束",
+        color: RGBColor(34, 139, 34),
+        use_alternating: false,
+    },
+    // ROS2ActionAdapter 阶段
+    SubStepColorConfig {
+        pattern: "等待服务器",
+        color: RGBColor(255, 215, 0),
+        use_alternating: false,
+    },
+    SubStepColorConfig {
+        pattern: "服务器已就绪",
+        color: RGBColor(50, 205, 50),
+        use_alternating: false,
+    },
+    SubStepColorConfig {
+        pattern: "[RESULT]",
+        color: RGBColor(147, 112, 219),
+        use_alternating: false,
+    },
+    // 通用状态
+    SubStepColorConfig {
+        pattern: "完成",
+        color: RGBColor(34, 139, 34),
+        use_alternating: false,
+    },
+    SubStepColorConfig {
+        pattern: "开始",
+        color: RGBColor(100, 149, 237),
+        use_alternating: false,
+    },
+];
+
+/// 获取子步骤颜色
+fn get_substep_color(name: &str, index: usize) -> RGBColor {
+    // 检查特殊精确匹配
+    if name == "开始执行" {
+        return RGBColor(100, 149, 237); // 矢车菊蓝
+    }
+    if name == "发送目标" {
+        return RGBColor(255, 165, 0); // 橙色
+    }
+    if name == "执行中" {
+        return RGBColor(135, 206, 250); // 淡天蓝
+    }
+    if name.starts_with("执行完成") {
+        return RGBColor(34, 139, 34); // 森林绿
+    }
+    if name == "设置导航目标" {
+        return RGBColor(70, 130, 180); // 钢蓝
+    }
+    if name.starts_with("发送导航目标")
+        || name.starts_with("发送头部控制目标")
+        || name.starts_with("发送腰部控制目标")
+    {
+        return RGBColor(255, 165, 0); // 橙色
+    }
+    if name == "服务端接受" {
+        return RGBColor(60, 179, 113); // 中海绿
+    }
+    if name == "结果回调" || name.starts_with("动作完成") {
+        return RGBColor(147, 112, 219); // 中紫色
+    }
+
+    // 检查模式匹配
+    for config in SUBSTEP_COLOR_CONFIG {
+        if name.contains(config.pattern) {
+            if config.use_alternating {
+                // 使用交替颜色
+                return if index.is_multiple_of(2) {
+                    config.color
+                } else {
+                    RGBColor(176, 224, 230) // 粉蓝
+                };
+            }
+            return config.color;
+        }
+    }
+
+    // 默认：使用交替颜色增强分隔
+    let colors = [
+        RGBColor(144, 238, 144), // 淡绿
+        RGBColor(255, 218, 185), // 桃色
+        RGBColor(173, 216, 230), // 淡蓝
+        RGBColor(255, 182, 193), // 淡粉
+        RGBColor(221, 160, 221), // 淡紫
+        RGBColor(255, 255, 150), // 淡黄
+    ];
+    colors[index % colors.len()]
+}
+
 /// 生成所有轮次的甘特图
 ///
 /// # 参数
@@ -188,24 +370,8 @@ fn generate_round_gantt(
             .or_insert(0.0) += duration;
     }
 
-    // 定义动作类型的顺序和显示名称
-    let type_order = vec![
-        ("navigation", "导航"),
-        ("preplan", "预打舵"),
-        ("arm", "手臂"),
-        ("head", "头部"),
-        ("waist", "腰部"),
-        // BehaviorTree 内部子阶段
-        ("ready_pose", "准备阶段"),
-        ("det_obj_pose", "目标检测"),
-        ("obstacle", "障碍物"),
-        ("transition", "过渡点"),
-        ("arm_move", "手臂运动"),
-        ("gripper", "夹爪"),
-    ];
-
-    // 收集所有出现的动作类型并分配Y轴位置
-    for (type_key, type_name) in &type_order {
+    // 使用配置表收集所有出现的动作类型并分配Y轴位置
+    for (type_key, type_name, _) in ACTION_TYPE_CONFIG {
         if chart_data.iter().any(|(_, _, _, _, t, _)| t == type_key) {
             action_type_map.insert(type_key.to_string(), action_types.len());
             let total_duration = action_type_durations.get(*type_key).unwrap_or(&0.0);
@@ -218,10 +384,7 @@ fn generate_round_gantt(
         if !action_type_map.contains_key(action_type) {
             action_type_map.insert(action_type.clone(), action_types.len());
             let total_duration = action_type_durations.get(action_type).unwrap_or(&0.0);
-            action_types.push(format!(
-                "{} (总计: {:.1}s)",
-                action_type, total_duration
-            ));
+            action_types.push(format!("{} (总计: {:.1}s)", action_type, total_duration));
         }
     }
 
@@ -304,21 +467,7 @@ fn generate_round_gantt(
         .draw()?;
 
     for (_label, detail_info, start, duration, step_type, sub_steps) in &chart_data {
-        let base_color = match step_type.as_str() {
-            "nav" | "navigation" => RGBColor(173, 216, 230), // 浅蓝色 - 导航
-            "preplan" => RGBColor(255, 255, 150),            // 浅黄色 - 预打舵
-            "arm" => RGBColor(144, 238, 144),                // 浅绿色 - 手臂
-            "head" => RGBColor(255, 218, 185),               // 浅橙色 - 头部
-            "waist" => RGBColor(221, 160, 221),              // 浅紫色 - 腰部
-            // BehaviorTree 内部子阶段
-            "ready_pose" => RGBColor(176, 224, 230), // 粉蓝色 - 准备阶段
-            "det_obj_pose" => RGBColor(255, 228, 181), // 浅黄橙 - 目标检测
-            "obstacle" => RGBColor(255, 182, 193),   // 浅粉红 - 障碍物
-            "transition" => RGBColor(216, 191, 216), // 淡紫色 - 过渡点
-            "arm_move" => RGBColor(152, 251, 152),   // 淡绿色 - 手臂运动
-            "gripper" => RGBColor(240, 230, 140),    // 卡其色 - 夹爪
-            _ => RGBColor(192, 192, 192),            // 灰色 - 其他
-        };
+        let base_color = get_action_color(step_type);
 
         // 获取该动作类型的Y轴位置
         let y_base = *action_type_map.get(step_type).unwrap() as f64;
@@ -397,81 +546,6 @@ fn draw_sub_steps<DB: DrawingBackend>(
 where
     DB::ErrorType: 'static,
 {
-    // 为不同类型的子步骤定义颜色
-    let get_sub_step_color = |name: &str, index: usize| -> RGBColor {
-        // BehaviorTree 模块 - 使用交替颜色增强分隔
-        if name.contains("GetReadyPose") {
-            // 根据序号使用交替颜色（准备阶段内部）
-            if index % 2 == 0 {
-                RGBColor(135, 206, 250) // 淡天蓝
-            } else {
-                RGBColor(176, 224, 230) // 粉蓝
-            }
-        } else if name.contains("DetObjPose") {
-            RGBColor(255, 228, 181) // 浅黄橙
-        } else if name.contains("ArmObstacle") || name.contains("ModifyArmObstacle") {
-            RGBColor(255, 182, 193) // 淡粉红
-        } else if name.contains("GetGoalPose") {
-            RGBColor(152, 251, 152) // 淡绿
-        } else if name.contains("ArmTransitionPoint") || name.contains("transition") {
-            RGBColor(216, 191, 216) // 淡紫色
-        } else if name.contains("ExecuteDoubleArmMove") || name.contains("arm_move") {
-            RGBColor(152, 251, 152) // 淡绿
-        } else if name.contains("gripper") {
-            RGBColor(240, 230, 140) // 卡其色
-        } else if name.contains("节点开始") {
-            RGBColor(100, 149, 237) // 矢车菊蓝
-        } else if name.contains("节点结束") {
-            RGBColor(34, 139, 34) // 森林绿
-        }
-        // ROS2ActionAdapter 阶段相关
-        else if name == "开始执行" {
-            RGBColor(100, 149, 237) // 矢车菊蓝
-        } else if name.starts_with("等待服务器") {
-            RGBColor(255, 215, 0) // 金色
-        } else if name == "服务器已就绪" {
-            RGBColor(50, 205, 50) // 酸橙绿
-        } else if name == "发送目标" {
-            RGBColor(255, 165, 0) // 橙色
-        } else if name == "执行中" {
-            RGBColor(135, 206, 250) // 淡天蓝 - 执行中
-        } else if name.starts_with("[RESULT]") {
-            RGBColor(147, 112, 219) // 中紫色
-        } else if name.starts_with("执行完成") {
-            RGBColor(34, 139, 34) // 森林绿
-        }
-        // 导航/master_control 旧格式
-        else if name == "设置导航目标" {
-            RGBColor(70, 130, 180) // 钢蓝
-        } else if name == "发送导航目标" || name == "发送头部控制目标" || name == "发送腰部控制目标"
-        {
-            RGBColor(255, 165, 0) // 橙色
-        } else if name == "服务端接受" {
-            RGBColor(60, 179, 113) // 中海绿
-        } else if name == "结果回调" {
-            RGBColor(147, 112, 219) // 中紫色
-        } else if name == "动作完成" || name.starts_with("动作完成") {
-            RGBColor(255, 69, 0) // 红橙色
-        } else if name.contains("完成") {
-            RGBColor(34, 139, 34) // 森林绿
-        } else if name.contains("开始") {
-            RGBColor(100, 149, 237) // 矢车菊蓝
-        }
-        // 默认颜色 - 使用交替颜色增强分隔
-        else {
-            // 根据索引使用不同的颜色
-            let colors = [
-                RGBColor(144, 238, 144), // 淡绿
-                RGBColor(255, 218, 185), // 桃色
-                RGBColor(173, 216, 230), // 淡蓝
-                RGBColor(255, 182, 193), // 淡粉
-                RGBColor(221, 160, 221), // 淡紫
-                RGBColor(255, 255, 150), // 淡黄
-            ];
-            colors[index % colors.len()]
-        }
-    };
-
     // 绘制每个子步骤之间的时间段
     for i in 0..sub_steps.len() {
         let sub_start_ts = sub_steps[i].timestamp;
@@ -492,7 +566,7 @@ where
 
         if sub_duration > 0.0 {
             // 根据子步骤名称获取颜色
-            let sub_color = get_sub_step_color(&sub_steps[i].name, i);
+            let sub_color = get_substep_color(&sub_steps[i].name, i);
 
             // 绘制子步骤方块（只在主方块范围内）
             chart.draw_series(std::iter::once(Rectangle::new(
@@ -563,124 +637,108 @@ where
     Ok(())
 }
 
+/// 模块名称简化映射表
+const MODULE_NAME_MAP: &[(&str, &str)] = &[
+    // 精确匹配（高优先级）
+    ("开始执行", "开始"),
+    ("服务器已就绪", "就绪"),
+    ("发送目标", "发送"),
+    ("执行中", "执行中"),
+    ("节点开始", "开始"),
+    ("节点结束", "结束"),
+    // 前缀匹配
+    ("ExecuteGripperMotion", "夹爪"),
+    ("GetTaskType", "获取类型"),
+    ("GetDetObjPose", "检测位姿"),
+    ("DetObjPose", "检测位姿"),
+    ("GetArmPose", "手臂位姿"),
+    ("CalcPutDownPose", "计算放置"),
+    ("CalcArmPose", "计算位姿"),
+    ("CalcGripperPos", "夹爪位置"),
+    ("CheckSafe", "安全检查"),
+    ("ArmControl", "手臂控制"),
+    ("ExecutePose", "执行位姿"),
+    ("WaitForTrigger", "等待触发"),
+    ("gripper", "夹爪"),
+    ("SendGoal", "发送目标"),
+    ("等待服务器", "等待服务器"),
+    ("[RESULT]", "结果"),
+    ("执行完成", "完成"),
+    // 包含匹配
+    ("ArmObstacle", "障碍物"),
+    ("ModifyArmObstacle", "障碍物"),
+    ("ArmTransitionPoint", "过渡点"),
+    ("transition", "过渡点"),
+    ("ExecuteDoubleArmMove", "手臂运动"),
+    ("arm_move", "手臂运动"),
+    ("GetGoalPose", "目标位姿"),
+    ("GetReadyPose", "准备"),
+];
+
+/// 动作状态后缀映射（用于 "XXX 开始/完成" 格式）
+const ACTION_STATE_SUFFIX_MAP: &[(&str, &str)] = &[
+    ("GetReadyPose", "准备"),
+    ("ModifyArmObstacle", "障碍"),
+    ("GetGoalPose", "目标"),
+    ("ArmTransitionPoint", "过渡"),
+    ("ExecuteDoubleArmMove", "运动"),
+];
+
 /// 从子步骤名称中提取简短的模块名称和时间（分开返回）
 /// 例如: "ExecuteGripperMotionAction (0.51s)" -> ("夹爪", "0.51s")
 fn extract_short_module_name(full_name: &str) -> (String, String) {
     // 提取耗时信息（如果有）
     let (name_part, time_part) = if let Some(paren_pos) = full_name.rfind(" (") {
         // 提取括号内的时间，去掉括号
-        let time = &full_name[paren_pos + 2..full_name.len() - 1]; // 去掉 " (" 和 ")"
+        let time = &full_name[paren_pos + 2..full_name.len() - 1];
         let name = &full_name[..paren_pos];
         (name, time)
     } else {
         (full_name, "")
     };
 
-    // 模块名称简化映射
-    let short_name = if name_part.starts_with("ExecuteGripperMotion") {
-        "夹爪"
-    } else if name_part.starts_with("GetTaskType") {
-        "获取类型"
-    } else if name_part.starts_with("GetDetObjPose") || name_part.starts_with("DetObjPose") {
-        "检测位姿"
-    } else if name_part.contains("ArmObstacle") || name_part.contains("ModifyArmObstacle") {
-        "障碍物"
-    } else if name_part.contains("ArmTransitionPoint") || name_part.contains("transition") {
-        "过渡点"
-    } else if name_part.contains("ExecuteDoubleArmMove") || name_part.contains("arm_move") {
-        "手臂运动"
-    } else if name_part.contains("GetGoalPose") {
-        "目标位姿"
-    } else if name_part.starts_with("GetArmPose") {
-        "手臂位姿"
-    } else if name_part.starts_with("CalcPutDownPose") {
-        "计算放置"
-    } else if name_part.starts_with("CalcArmPose") {
-        "计算位姿"
-    } else if name_part.starts_with("CalcGripperPos") {
-        "夹爪位置"
-    } else if name_part.starts_with("CheckSafe") {
-        "安全检查"
-    } else if name_part.starts_with("ArmControl") {
-        "手臂控制"
-    } else if name_part.starts_with("ExecutePose") {
-        "执行位姿"
-    } else if name_part.starts_with("WaitForTrigger") {
-        "等待触发"
-    } else if name_part.contains("GetReadyPose") {
-        "准备"
-    } else if name_part.starts_with("gripper") {
-        "夹爪"
-    } else if name_part.starts_with("SendGoal") {
-        "发送目标"
-    // ROS2ActionAdapter 相关阶段
-    } else if name_part == "开始执行" {
-        "开始"
-    } else if name_part.starts_with("等待服务器") {
-        "等待服务器"
-    } else if name_part == "服务器已就绪" {
-        "就绪"
-    } else if name_part == "发送目标" {
-        "发送"
-    } else if name_part == "执行中" {
-        "执行中"
-    } else if name_part.starts_with("[RESULT]") {
-        "结果"
-    } else if name_part.starts_with("执行完成") {
-        "完成"
-    // BehaviorTree 节点相关
-    } else if name_part.contains("节点开始") {
-        "开始"
-    } else if name_part.contains("节点结束") {
-        "结束"
-    } else if name_part.ends_with(" 开始") {
-        // "XXXAction 开始" -> "XXX开始"
+    // 处理 "XXX 开始/完成" 格式
+    if name_part.ends_with(" 开始") {
         let module = name_part.trim_end_matches(" 开始");
-        let short = if module.contains("GetReadyPose") {
-            "准备"
-        } else if module.contains("ModifyArmObstacle") {
-            "障碍"
-        } else if module.contains("GetGoalPose") {
-            "目标"
-        } else if module.contains("ArmTransitionPoint") {
-            "过渡"
-        } else if module.contains("ExecuteDoubleArmMove") {
-            "运动"
-        } else {
-            module
-        };
+        let short = find_action_state_suffix(module).unwrap_or(module);
         return (format!("{}▶", short), time_part.to_string());
-    } else if name_part.ends_with(" 完成") {
-        // "XXXAction 完成" -> "XXX完成"
+    }
+    if name_part.ends_with(" 完成") {
         let module = name_part.trim_end_matches(" 完成");
-        let short = if module.contains("GetReadyPose") {
-            "准备"
-        } else if module.contains("ModifyArmObstacle") {
-            "障碍"
-        } else if module.contains("GetGoalPose") {
-            "目标"
-        } else if module.contains("ArmTransitionPoint") {
-            "过渡"
-        } else if module.contains("ExecuteDoubleArmMove") {
-            "运动"
-        } else {
-            module
-        };
+        let short = find_action_state_suffix(module).unwrap_or(module);
         return (format!("{}✓", short), time_part.to_string());
-    } else {
-        // 如果名称太长，截取前6个字符
-        if name_part.chars().count() > 8 {
-            &name_part[..name_part
-                .char_indices()
-                .nth(8)
-                .map(|(i, _)| i)
-                .unwrap_or(name_part.len())]
-        } else {
-            name_part
+    }
+
+    // 使用映射表查找简短名称
+    for (pattern, short) in MODULE_NAME_MAP {
+        if name_part == *pattern || name_part.starts_with(pattern) || name_part.contains(pattern) {
+            return (short.to_string(), time_part.to_string());
         }
+    }
+
+    // 默认处理：如果名称太长，截取前8个字符
+    let short_name = if name_part.chars().count() > 8 {
+        let end_idx = name_part
+            .char_indices()
+            .nth(8)
+            .map(|(i, _)| i)
+            .unwrap_or(name_part.len());
+        &name_part[..end_idx]
+    } else {
+        name_part
     };
 
     (short_name.to_string(), time_part.to_string())
+}
+
+/// 查找动作状态后缀的简短名称
+fn find_action_state_suffix(module: &str) -> Option<&'static str> {
+    for (pattern, short) in ACTION_STATE_SUFFIX_MAP {
+        if module.contains(pattern) {
+            return Some(short);
+        }
+    }
+    None
 }
 
 /// 绘制时间标注

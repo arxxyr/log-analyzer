@@ -15,6 +15,31 @@ use regex::Regex;
 
 use crate::models::{CycleType, LogLine, PauseEvent, Round};
 
+/// 结束当前轮次并推入列表
+fn finalize_current_round(current: &mut Option<Round>, rounds: &mut Vec<Round>, end_ts: f64) {
+    if let Some(mut round) = current.take() {
+        if round.end_ts.is_none() {
+            round.end_ts = Some(end_ts);
+        }
+        rounds.push(round);
+    }
+}
+
+/// 创建新轮次
+fn create_round(rounds: &[Round], cycle_type: CycleType, loop_number: u32, start_ts: f64) -> Round {
+    Round {
+        id: rounds.len() + 1,
+        loop_number: Some(loop_number),
+        cycle_type,
+        layer_index: 0,
+        start_ts,
+        end_ts: None,
+        pose0: None,
+        pose6: None,
+        pause_events: Vec::new(),
+    }
+}
+
 /// 检测日志中的任务轮次
 ///
 /// 基于循环标记自动检测任务轮次，支持三种循环类型：
@@ -57,27 +82,8 @@ pub fn detect_rounds(lines: &[LogLine], t_last: f64) -> Result<Vec<Round>> {
     for line in lines {
         // 检测初始循环开始
         if init_start_regex.is_match(&line.line) {
-            // 如果当前有进行中的轮次，先结束它
-            if let Some(mut round) = current.take() {
-                if round.end_ts.is_none() {
-                    round.end_ts = Some(line.timestamp);
-                }
-                rounds.push(round);
-            }
-
-            // 开始新的初始循环
-            let id = rounds.len() + 1;
-            current = Some(Round {
-                id,
-                loop_number: Some(0), // 初始循环用0表示
-                cycle_type: CycleType::Initial,
-                layer_index: 0,
-                start_ts: line.timestamp,
-                end_ts: None,
-                pose0: None,
-                pose6: None,
-                pause_events: Vec::new(),
-            });
+            finalize_current_round(&mut current, &mut rounds, line.timestamp);
+            current = Some(create_round(&rounds, CycleType::Initial, 0, line.timestamp));
             continue;
         }
 
@@ -95,28 +101,13 @@ pub fn detect_rounds(lines: &[LogLine], t_last: f64) -> Result<Vec<Round>> {
         // 检测常规循环开始
         if let Some(caps) = normal_start_regex.captures(&line.line) {
             let cycle_number = caps[1].parse::<u32>().unwrap_or(1);
-
-            // 如果当前有进行中的轮次，先结束它
-            if let Some(mut round) = current.take() {
-                if round.end_ts.is_none() {
-                    round.end_ts = Some(line.timestamp);
-                }
-                rounds.push(round);
-            }
-
-            // 开始新的常规循环
-            let id = rounds.len() + 1;
-            current = Some(Round {
-                id,
-                loop_number: Some(cycle_number),
-                cycle_type: CycleType::Normal(cycle_number),
-                layer_index: 0,
-                start_ts: line.timestamp,
-                end_ts: None,
-                pose0: None,
-                pose6: None,
-                pause_events: Vec::new(),
-            });
+            finalize_current_round(&mut current, &mut rounds, line.timestamp);
+            current = Some(create_round(
+                &rounds,
+                CycleType::Normal(cycle_number),
+                cycle_number,
+                line.timestamp,
+            ));
             continue;
         }
 
@@ -134,27 +125,8 @@ pub fn detect_rounds(lines: &[LogLine], t_last: f64) -> Result<Vec<Round>> {
 
         // 检测最终循环开始
         if final_start_regex.is_match(&line.line) {
-            // 如果当前有进行中的轮次，先结束它
-            if let Some(mut round) = current.take() {
-                if round.end_ts.is_none() {
-                    round.end_ts = Some(line.timestamp);
-                }
-                rounds.push(round);
-            }
-
-            // 开始新的最终循环
-            let id = rounds.len() + 1;
-            current = Some(Round {
-                id,
-                loop_number: Some(999), // 最终循环用999表示
-                cycle_type: CycleType::Final,
-                layer_index: 0,
-                start_ts: line.timestamp,
-                end_ts: None,
-                pose0: None,
-                pose6: None,
-                pause_events: Vec::new(),
-            });
+            finalize_current_round(&mut current, &mut rounds, line.timestamp);
+            current = Some(create_round(&rounds, CycleType::Final, 999, line.timestamp));
             continue;
         }
 

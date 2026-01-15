@@ -234,16 +234,13 @@ impl PluginManager {
 
         // 使用 abi_stable 的 lib_header_from_path 加载插件
         // 这会正确处理 LibHeader 结构并获取根模块
-        let lib_header = lib_header_from_path(path).map_err(|e| {
-            anyhow::anyhow!("无法加载插件库 {}: {:?}", path.display(), e)
-        })?;
+        let lib_header = lib_header_from_path(path)
+            .map_err(|e| anyhow::anyhow!("无法加载插件库 {}: {:?}", path.display(), e))?;
 
         // 初始化根模块并检查 ABI 兼容性
         let module_ref = lib_header
             .init_root_module::<AnalyzerPluginModule_Ref>()
-            .map_err(|e| {
-                anyhow::anyhow!("初始化插件模块失败 {}: {:?}", path.display(), e)
-            })?;
+            .map_err(|e| anyhow::anyhow!("初始化插件模块失败 {}: {:?}", path.display(), e))?;
 
         // 立即创建插件实例并获取元数据
         let plugin = module_ref.create_plugin()();
@@ -318,7 +315,9 @@ fn create_visualization_config(config: &AnalyzerConfig) -> VisualizationConfig {
             // 根据优先级分配颜色
             let priority = *_priority as usize;
             let color = default_colors.get(priority).unwrap_or(&"#CCCCCC");
-            vis_config.track_colors.insert(track_name.clone(), color.to_string());
+            vis_config
+                .track_colors
+                .insert(track_name.clone(), color.to_string());
         }
     }
 
@@ -330,7 +329,11 @@ fn create_visualization_config(config: &AnalyzerConfig) -> VisualizationConfig {
 // ============================================================================
 
 /// 执行分析（基础版本）
-fn run_analysis(plugin: &PluginInfo, input_file: &Path, output_dir: &Path) -> Result<AnalyzeResult> {
+fn run_analysis(
+    plugin: &PluginInfo,
+    input_file: &Path,
+    output_dir: &Path,
+) -> Result<AnalyzeResult> {
     run_analysis_with_context(plugin, input_file, output_dir, None)
 }
 
@@ -475,9 +478,7 @@ fn merge_and_visualize(
         primary_source: config.multi_file.alignment.primary_source.clone(),
         time_tolerance: config.multi_file.alignment.time_tolerance,
         alignment_strategy: match config.multi_file.alignment.strategy {
-            analyzer_workflow::config::AlignmentStrategy::Timestamp => {
-                AlignmentStrategy::Timestamp
-            }
+            analyzer_workflow::config::AlignmentStrategy::Timestamp => AlignmentStrategy::Timestamp,
             analyzer_workflow::config::AlignmentStrategy::EventBased => {
                 AlignmentStrategy::EventBased
             }
