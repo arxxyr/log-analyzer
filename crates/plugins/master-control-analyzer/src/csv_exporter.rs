@@ -4,8 +4,36 @@
 
 use anyhow::Result;
 
-use crate::models::{CsvRecord, NavigationFlow, Round};
+use crate::models::{ActionOperation, CsvRecord, NavigationFlow, Round};
 use crate::utils::timestamp_to_beijing_time;
+
+/// 将动作类型转换为中文显示名称
+fn action_type_to_display(action_type: &str) -> String {
+    match action_type {
+        "navigation" => "导航".to_string(),
+        "arm" => "机械臂".to_string(),
+        "head" => "头部".to_string(),
+        "waist" => "腰部".to_string(),
+        "preplan" => "预打舵".to_string(),
+        _ => action_type.to_string(),
+    }
+}
+
+/// 生成动作标签
+fn build_action_label(operation: &ActionOperation) -> String {
+    match operation.action_type.as_str() {
+        "navigation" => "导航".to_string(),
+        "arm" => format!(
+            "机械臂:{}(code:{})",
+            operation.label,
+            operation.action_code.unwrap_or(0)
+        ),
+        "head" => "头部控制".to_string(),
+        "waist" => "腰部控制".to_string(),
+        "preplan" => operation.label.clone(),
+        _ => operation.label.clone(),
+    }
+}
 
 /// 将时间戳转换为相对时间（毫秒精度截断）
 fn to_rel_time(ts: f64, t0: f64) -> f64 {
@@ -228,39 +256,18 @@ pub fn generate_action_timeline_csv(
         // 添加其他动作
         for operation in &flow.operations {
             // 如果这个 navigation 已经从 nav_start_ts 添加了，跳过（按时间戳匹配避免重复）
-            if operation.action_type == "navigation" {
-                if let (Some(nav_start), Some(op_start)) = (flow.nav_start_ts, operation.start_ts) {
-                    // 时间戳差异小于 0.01 秒认为是同一个导航
-                    if (nav_start - op_start).abs() < 0.01 {
-                        continue;
-                    }
-                }
+            if operation.action_type == "navigation"
+                && let (Some(nav_start), Some(op_start)) = (flow.nav_start_ts, operation.start_ts)
+                && (nav_start - op_start).abs() < 0.01
+            {
+                continue;
             }
             if let Some(start) = operation.start_ts {
                 let end = operation.end_ts;
                 let duration = end.map(|e| e - start);
 
-                let action_label = match operation.action_type.as_str() {
-                    "navigation" => "导航".to_string(),
-                    "arm" => format!(
-                        "机械臂:{}(code:{})",
-                        operation.label,
-                        operation.action_code.unwrap_or(0)
-                    ),
-                    "head" => "头部控制".to_string(),
-                    "waist" => "腰部控制".to_string(),
-                    "preplan" => operation.label.clone(),
-                    _ => operation.label.clone(),
-                };
-
-                let action_type_display = match operation.action_type.as_str() {
-                    "navigation" => "导航".to_string(),
-                    "arm" => "机械臂".to_string(),
-                    "head" => "头部".to_string(),
-                    "waist" => "腰部".to_string(),
-                    "preplan" => "预打舵".to_string(),
-                    _ => operation.action_type.clone(),
-                };
+                let action_label = build_action_label(operation);
+                let action_type_display = action_type_to_display(&operation.action_type);
 
                 all_actions.push(ActionRecord {
                     round_id,

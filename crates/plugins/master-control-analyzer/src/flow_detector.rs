@@ -53,6 +53,27 @@ fn add_substep_to_adapter(
     }
 }
 
+/// 更新预打舵动作（在当前流程或已完成流程中查找）
+fn update_preplan_action<F>(
+    current_flow: &mut Option<NavigationFlow>,
+    flows: &mut [NavigationFlow],
+    mut updater: F,
+) where
+    F: FnMut(&mut ActionOperation),
+{
+    // 优先在当前流程中查找
+    let flow_to_update = current_flow.as_mut().or_else(|| flows.last_mut());
+
+    if let Some(flow) = flow_to_update {
+        for op in flow.operations.iter_mut().rev() {
+            if op.action_type == "preplan" && op.end_ts.is_none() {
+                updater(op);
+                break;
+            }
+        }
+    }
+}
+
 /// 在当前 BT 节点上下文中，更新最近的指定类型子动作
 fn update_bt_subaction<F>(bt_node: &mut Option<BtNodeContext>, action_type: &str, mut updater: F)
 where
@@ -244,23 +265,23 @@ pub fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<Navigatio
         // BehaviorTree 节点开始标记
         if bt_start_marker_regex.is_match(&line.line) {
             // 查找下一行的节点ID
-            if let Some(next_line) = lines.get(line_idx + 1) {
-                if let Some(caps) = bt_node_id_regex.captures(&next_line.line) {
-                    let node_id = caps[1].to_string();
-                    // 更新已有的节点上下文或创建新的
-                    if let Some(ref mut ctx) = active_bt_node {
-                        if ctx.node_id != node_id {
-                            ctx.node_id = node_id;
-                        }
-                        ctx.start_ts = line.timestamp;
-                    } else {
-                        active_bt_node = Some(BtNodeContext {
-                            node_id,
-                            action_code: None,
-                            start_ts: line.timestamp,
-                            sub_actions: Vec::new(),
-                        });
+            if let Some(next_line) = lines.get(line_idx + 1)
+                && let Some(caps) = bt_node_id_regex.captures(&next_line.line)
+            {
+                let node_id = caps[1].to_string();
+                // 更新已有的节点上下文或创建新的
+                if let Some(ref mut ctx) = active_bt_node {
+                    if ctx.node_id != node_id {
+                        ctx.node_id = node_id;
                     }
+                    ctx.start_ts = line.timestamp;
+                } else {
+                    active_bt_node = Some(BtNodeContext {
+                        node_id,
+                        action_code: None,
+                        start_ts: line.timestamp,
+                        sub_actions: Vec::new(),
+                    });
                 }
             }
             continue;
@@ -430,19 +451,19 @@ pub fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<Navigatio
         if let Some(caps) = get_ready_pose_end_regex.captures(&line.line) {
             let _status = caps[1].to_string();
             let cost_ms: u32 = caps[2].parse().unwrap_or(0);
-            if let Some(ref mut ctx) = active_bt_node {
-                if let Some((_, count)) = ready_pose_phase {
-                    for action in ctx.sub_actions.iter_mut().rev() {
-                        if action.action_type == "ready_pose" && action.end_ts.is_none() {
-                            action.sub_steps.push(SubStep {
-                                name: format!("GetReadyPose #{} 完成 ({}ms)", count, cost_ms),
-                                timestamp: line.timestamp,
-                            });
-                            // 更新结束时间（每次都更新，最终为最后一个的结束时间）
-                            action.end_ts = Some(line.timestamp);
-                            action.status = "ok".to_string();
-                            break;
-                        }
+            if let Some(ref mut ctx) = active_bt_node
+                && let Some((_, count)) = ready_pose_phase
+            {
+                for action in ctx.sub_actions.iter_mut().rev() {
+                    if action.action_type == "ready_pose" && action.end_ts.is_none() {
+                        action.sub_steps.push(SubStep {
+                            name: format!("GetReadyPose #{} 完成 ({}ms)", count, cost_ms),
+                            timestamp: line.timestamp,
+                        });
+                        // 更新结束时间（每次都更新，最终为最后一个的结束时间）
+                        action.end_ts = Some(line.timestamp);
+                        action.status = "ok".to_string();
+                        break;
                     }
                 }
             }
@@ -847,49 +868,48 @@ pub fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<Navigatio
             }
 
             // 将完成的动作添加到当前流程或创建新流程
-            if let Some(key) = completed_key {
-                if let Some(action) = active_adapters.remove(&key) {
-                    let round_id =
-                        ts_to_round_id(action.start_ts.unwrap_or(line.timestamp), rounds);
+            if let Some(key) = completed_key
+                && let Some(action) = active_adapters.remove(&key)
+            {
+                let round_id = ts_to_round_id(action.start_ts.unwrap_or(line.timestamp), rounds);
 
-                    // 如果当前没有流程或轮次不同，创建新流程
-                    if current_flow.is_none()
-                        || current_flow.as_ref().map(|f| f.round_id) != Some(round_id)
+                // 如果当前没有流程或轮次不同，创建新流程
+                if current_flow.is_none()
+                    || current_flow.as_ref().map(|f| f.round_id) != Some(round_id)
+                {
+                    // 保存当前流程
+                    if let Some(flow) = current_flow.take() {
+                        flows.push(flow);
+                    }
+
+                    // 创建新流程
+                    // 如果第一个动作是导航，设置 nav_start_ts/nav_end_ts
+                    let (nav_start, nav_end, nav_sub_steps) = if action.action_type == "navigation"
                     {
-                        // 保存当前流程
-                        if let Some(flow) = current_flow.take() {
-                            flows.push(flow);
-                        }
-
-                        // 创建新流程
-                        // 如果第一个动作是导航，设置 nav_start_ts/nav_end_ts
-                        let (nav_start, nav_end, nav_sub_steps) =
-                            if action.action_type == "navigation" {
-                                (action.start_ts, action.end_ts, action.sub_steps.clone())
-                            } else {
-                                (None, None, Vec::new())
-                            };
-                        current_flow = Some(NavigationFlow {
-                            nav_start_ts: nav_start,
-                            nav_end_ts: nav_end,
-                            nav_target_pos: None,
-                            nav_target_ori: None,
-                            nav_status: "ok".to_string(),
-                            nav_sub_steps,
-                            round_id,
-                            operations: vec![action],
-                        });
+                        (action.start_ts, action.end_ts, action.sub_steps.clone())
                     } else {
-                        // 添加到当前流程
-                        if let Some(ref mut flow) = current_flow {
-                            // 如果是导航动作，更新导航信息
-                            if action.action_type == "navigation" {
-                                flow.nav_start_ts = action.start_ts;
-                                flow.nav_end_ts = action.end_ts;
-                                flow.nav_sub_steps = action.sub_steps.clone();
-                            }
-                            flow.operations.push(action);
+                        (None, None, Vec::new())
+                    };
+                    current_flow = Some(NavigationFlow {
+                        nav_start_ts: nav_start,
+                        nav_end_ts: nav_end,
+                        nav_target_pos: None,
+                        nav_target_ori: None,
+                        nav_status: "ok".to_string(),
+                        nav_sub_steps,
+                        round_id,
+                        operations: vec![action],
+                    });
+                } else {
+                    // 添加到当前流程
+                    if let Some(ref mut flow) = current_flow {
+                        // 如果是导航动作，更新导航信息
+                        if action.action_type == "navigation" {
+                            flow.nav_start_ts = action.start_ts;
+                            flow.nav_end_ts = action.end_ts;
+                            flow.nav_sub_steps = action.sub_steps.clone();
                         }
+                        flow.operations.push(action);
                     }
                 }
             }
@@ -952,92 +972,43 @@ pub fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<Navigatio
             }
 
             // 更新最近的预打舵动作
-            if let Some(flow) = current_flow.as_mut() {
-                for op in flow.operations.iter_mut().rev() {
-                    if op.action_type == "preplan" && op.end_ts.is_none() {
-                        if let Some(code) = action_code_val {
-                            op.action_code = Some(code);
-                        }
-                        op.sub_steps.push(SubStep {
-                            name: format!("设置目标→{}", pos_str),
-                            timestamp: line.timestamp,
-                        });
-                        break;
-                    }
+            let ts = line.timestamp;
+            update_preplan_action(&mut current_flow, &mut flows, |op| {
+                if let Some(code) = action_code_val {
+                    op.action_code = Some(code);
                 }
-            } else if let Some(flow) = flows.last_mut() {
-                for op in flow.operations.iter_mut().rev() {
-                    if op.action_type == "preplan" && op.end_ts.is_none() {
-                        if let Some(code) = action_code_val {
-                            op.action_code = Some(code);
-                        }
-                        op.sub_steps.push(SubStep {
-                            name: format!("设置目标→{}", pos_str),
-                            timestamp: line.timestamp,
-                        });
-                        break;
-                    }
-                }
-            }
+                op.sub_steps.push(SubStep {
+                    name: format!("设置目标→{}", pos_str),
+                    timestamp: ts,
+                });
+            });
             continue;
         }
 
         // 服务响应
         if let Some(caps) = preplan_response_regex.captures(&line.line) {
-            let error_code = caps[2].trim();
-            // 添加响应子步骤（不结束动作，等待执行成功）
-            if let Some(flow) = current_flow.as_mut() {
-                for op in flow.operations.iter_mut().rev() {
-                    if op.action_type == "preplan" && op.end_ts.is_none() {
-                        op.sub_steps.push(SubStep {
-                            name: format!("响应(code={})", error_code),
-                            timestamp: line.timestamp,
-                        });
-                        break;
-                    }
-                }
-            } else if let Some(flow) = flows.last_mut() {
-                for op in flow.operations.iter_mut().rev() {
-                    if op.action_type == "preplan" && op.end_ts.is_none() {
-                        op.sub_steps.push(SubStep {
-                            name: format!("响应(code={})", error_code),
-                            timestamp: line.timestamp,
-                        });
-                        break;
-                    }
-                }
-            }
+            let error_code = caps[2].trim().to_string();
+            let ts = line.timestamp;
+            update_preplan_action(&mut current_flow, &mut flows, |op| {
+                op.sub_steps.push(SubStep {
+                    name: format!("响应(code={})", error_code),
+                    timestamp: ts,
+                });
+            });
             continue;
         }
 
         // 执行成功
         if preplan_end_regex.is_match(&line.line) {
-            // 完成预打舵动作
-            if let Some(flow) = current_flow.as_mut() {
-                for op in flow.operations.iter_mut().rev() {
-                    if op.action_type == "preplan" && op.end_ts.is_none() {
-                        op.sub_steps.push(SubStep {
-                            name: "执行成功".to_string(),
-                            timestamp: line.timestamp,
-                        });
-                        op.end_ts = Some(line.timestamp);
-                        op.status = "ok".to_string();
-                        break;
-                    }
-                }
-            } else if let Some(flow) = flows.last_mut() {
-                for op in flow.operations.iter_mut().rev() {
-                    if op.action_type == "preplan" && op.end_ts.is_none() {
-                        op.sub_steps.push(SubStep {
-                            name: "执行成功".to_string(),
-                            timestamp: line.timestamp,
-                        });
-                        op.end_ts = Some(line.timestamp);
-                        op.status = "ok".to_string();
-                        break;
-                    }
-                }
-            }
+            let ts = line.timestamp;
+            update_preplan_action(&mut current_flow, &mut flows, |op| {
+                op.sub_steps.push(SubStep {
+                    name: "执行成功".to_string(),
+                    timestamp: ts,
+                });
+                op.end_ts = Some(ts);
+                op.status = "ok".to_string();
+            });
             continue;
         }
     }

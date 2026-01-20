@@ -4,6 +4,34 @@
 
 use chrono::{DateTime, FixedOffset};
 
+/// 计算数字的显示宽度（用于前导零填充）
+///
+/// # 参数
+/// * `n` - 要计算宽度的数字
+///
+/// # 返回
+/// - 1-9: 宽度 1
+/// - 10-99: 宽度 2
+/// - 100+: 宽度 3
+///
+/// # 示例
+/// ```
+/// use master_control_analyzer::utils::digit_width;
+///
+/// assert_eq!(digit_width(5), 1);
+/// assert_eq!(digit_width(42), 2);
+/// assert_eq!(digit_width(123), 3);
+/// ```
+pub fn digit_width(n: usize) -> usize {
+    if n >= 100 {
+        3
+    } else if n >= 10 {
+        2
+    } else {
+        1
+    }
+}
+
 /// 将Unix时间戳转换为北京时间字符串
 ///
 /// # 参数

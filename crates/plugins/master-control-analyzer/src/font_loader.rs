@@ -61,32 +61,30 @@ impl FontLoader {
                     Some(std::env::temp_dir().join(".analyzer_fonts")),
                 ];
 
-                for font_dir_opt in font_dirs {
-                    if let Some(font_dir) = font_dir_opt {
-                        // 尝试创建字体目录
-                        if fs::create_dir_all(&font_dir).is_ok() {
-                            let font_path = font_dir.join(FONT_NAME);
+                for font_dir in font_dirs.into_iter().flatten() {
+                    // 尝试创建字体目录
+                    if fs::create_dir_all(&font_dir).is_ok() {
+                        let font_path = font_dir.join(FONT_NAME);
 
-                            // 如果字体文件不存在或大小不匹配，则写入
-                            let need_write = !font_path.exists()
-                                || fs::metadata(&font_path)
-                                    .map(|m| m.len() as usize != FONT_DATA.len())
-                                    .unwrap_or(true);
+                        // 如果字体文件不存在或大小不匹配，则写入
+                        let need_write = !font_path.exists()
+                            || fs::metadata(&font_path)
+                                .map(|m| m.len() as usize != FONT_DATA.len())
+                                .unwrap_or(true);
 
-                            if need_write {
-                                if let Ok(_) = fs::write(&font_path, FONT_DATA) {
-                                    eprintln!("[字体] 已提取字体到: {:?}", font_path);
-                                    // 提取成功后，设置环境变量和刷新缓存
-                                    Self::setup_font_environment(&font_dir);
-                                    Self::refresh_font_cache(&font_dir);
-                                    return Some(font_path);
-                                }
-                            } else {
-                                eprintln!("[字体] 使用已有字体: {:?}", font_path);
-                                // 确保环境变量设置正确
+                        if need_write {
+                            if fs::write(&font_path, FONT_DATA).is_ok() {
+                                eprintln!("[字体] 已提取字体到: {:?}", font_path);
+                                // 提取成功后，设置环境变量和刷新缓存
                                 Self::setup_font_environment(&font_dir);
+                                Self::refresh_font_cache(&font_dir);
                                 return Some(font_path);
                             }
+                        } else {
+                            eprintln!("[字体] 使用已有字体: {:?}", font_path);
+                            // 确保环境变量设置正确
+                            Self::setup_font_environment(&font_dir);
+                            return Some(font_path);
                         }
                     }
                 }
@@ -190,7 +188,7 @@ impl FontLoader {
 
 impl Default for FontLoader {
     fn default() -> Self {
-        Self::new().unwrap_or_else(|_| Self {
+        Self::new().unwrap_or(Self {
             font_available: false,
         })
     }

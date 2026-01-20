@@ -74,6 +74,36 @@ impl AnalyzerPlugin for MasterControlAnalyzer {
     }
 }
 
+/// 统计导航流程中的各类动作数量
+///
+/// # 返回
+/// (导航数, 预打舵数, 手臂数, 头部数, 腰部数)
+fn count_actions(flows: &[NavigationFlow]) -> (usize, usize, usize, usize, usize) {
+    let mut nav_count = 0;
+    let mut preplan_count = 0;
+    let mut arm_count = 0;
+    let mut head_count = 0;
+    let mut waist_count = 0;
+
+    for flow in flows {
+        if flow.nav_start_ts.is_some() {
+            nav_count += 1;
+        }
+        for op in &flow.operations {
+            match op.action_type.as_str() {
+                "navigation" => nav_count += 1,
+                "preplan" => preplan_count += 1,
+                "arm" => arm_count += 1,
+                "head" => head_count += 1,
+                "waist" => waist_count += 1,
+                _ => {}
+            }
+        }
+    }
+
+    (nav_count, preplan_count, arm_count, head_count, waist_count)
+}
+
 /// 内部分析函数（使用原生 Rust 类型）
 ///
 /// 封装了完整的分析流程，从日志解析到结果输出。
@@ -102,27 +132,7 @@ fn run_analysis_internal(input_file: &str, output_dir: &str) -> Result<AnalyzeRe
     let flow_count = flows.len();
 
     // 统计各类动作
-    let mut nav_count = 0;
-    let mut arm_count = 0;
-    let mut head_count = 0;
-    let mut waist_count = 0;
-    let mut preplan_count = 0;
-    for flow in &flows {
-        // 只有有导航动作的流程才计入导航数
-        if flow.nav_start_ts.is_some() {
-            nav_count += 1;
-        }
-        for op in &flow.operations {
-            match op.action_type.as_str() {
-                "navigation" => nav_count += 1,
-                "arm" => arm_count += 1,
-                "head" => head_count += 1,
-                "waist" => waist_count += 1,
-                "preplan" => preplan_count += 1,
-                _ => {}
-            }
-        }
-    }
+    let (nav_count, preplan_count, arm_count, head_count, waist_count) = count_actions(&flows);
 
     // 4. 构建CSV记录
     let records = build_csv_records(&flows, &rounds, t0);
@@ -144,14 +154,8 @@ fn run_analysis_internal(input_file: &str, output_dir: &str) -> Result<AnalyzeRe
 
     // 生成甘特图
     generate_gantt_charts(&flows, &rounds, output_dir, t0)?;
+    let width = utils::digit_width(rounds.len());
     for round in &rounds {
-        let width = if rounds.len() >= 100 {
-            3
-        } else if rounds.len() >= 10 {
-            2
-        } else {
-            1
-        };
         output_files.push(OutputFile {
             path: format!(
                 "{}/round_{:0width$}_gantt.png",

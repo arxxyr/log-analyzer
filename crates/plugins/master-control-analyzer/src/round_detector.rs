@@ -89,11 +89,11 @@ pub fn detect_rounds(lines: &[LogLine], t_last: f64) -> Result<Vec<Round>> {
 
         // 检测初始循环完成
         if init_end_regex.is_match(&line.line) {
-            if let Some(ref mut round) = current {
-                if matches!(round.cycle_type, CycleType::Initial) {
-                    round.end_ts = Some(line.timestamp);
-                    rounds.push(current.take().unwrap());
-                }
+            if let Some(ref mut round) = current
+                && matches!(round.cycle_type, CycleType::Initial)
+            {
+                round.end_ts = Some(line.timestamp);
+                rounds.push(current.take().unwrap());
             }
             continue;
         }
@@ -114,11 +114,11 @@ pub fn detect_rounds(lines: &[LogLine], t_last: f64) -> Result<Vec<Round>> {
         // 检测常规循环完成
         if let Some(caps) = normal_end_regex.captures(&line.line) {
             let cycle_number = caps[1].parse::<u32>().unwrap_or(1);
-            if let Some(ref mut round) = current {
-                if matches!(round.cycle_type, CycleType::Normal(n) if n == cycle_number) {
-                    round.end_ts = Some(line.timestamp);
-                    rounds.push(current.take().unwrap());
-                }
+            if let Some(ref mut round) = current
+                && matches!(round.cycle_type, CycleType::Normal(n) if n == cycle_number)
+            {
+                round.end_ts = Some(line.timestamp);
+                rounds.push(current.take().unwrap());
             }
             continue;
         }
@@ -132,11 +132,11 @@ pub fn detect_rounds(lines: &[LogLine], t_last: f64) -> Result<Vec<Round>> {
 
         // 检测最终循环完成
         if final_end_regex.is_match(&line.line) {
-            if let Some(ref mut round) = current {
-                if matches!(round.cycle_type, CycleType::Final) {
-                    round.end_ts = Some(line.timestamp);
-                    rounds.push(current.take().unwrap());
-                }
+            if let Some(ref mut round) = current
+                && matches!(round.cycle_type, CycleType::Final)
+            {
+                round.end_ts = Some(line.timestamp);
+                rounds.push(current.take().unwrap());
             }
             continue;
         }
@@ -193,16 +193,17 @@ pub fn detect_rounds(lines: &[LogLine], t_last: f64) -> Result<Vec<Round>> {
 /// # 返回
 /// 对应的轮次ID，如果没有找到则返回0或最后一个轮次的ID
 pub fn ts_to_round_id(ts: f64, rounds: &[Round]) -> usize {
-    for round in rounds {
-        let end_ts = round.end_ts.unwrap_or(f64::INFINITY);
-        if ts >= round.start_ts && ts < end_ts {
-            return round.id;
-        }
-    }
-    if let Some(last_round) = rounds.last()
-        && ts >= last_round.end_ts.unwrap_or(0.0)
-    {
-        return last_round.id;
-    }
-    0
+    // 查找时间戳落在哪个轮次内
+    rounds
+        .iter()
+        .find(|r| ts >= r.start_ts && ts < r.end_ts.unwrap_or(f64::INFINITY))
+        .map(|r| r.id)
+        .or_else(|| {
+            // 如果在最后一个轮次之后，返回最后一个轮次的 ID
+            rounds
+                .last()
+                .filter(|r| ts >= r.end_ts.unwrap_or(0.0))
+                .map(|r| r.id)
+        })
+        .unwrap_or(0)
 }

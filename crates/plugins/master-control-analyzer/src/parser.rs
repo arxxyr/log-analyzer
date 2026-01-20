@@ -68,14 +68,14 @@ pub fn load_log_lines(log_path: &str) -> Result<Vec<LogLine>> {
 
     for line in content.lines() {
         // 先尝试新格式
-        if let Some(caps) = new_ts_regex.captures(line) {
-            if let Some(timestamp) = parse_datetime_to_unix(&caps[1]) {
-                lines.push(LogLine {
-                    timestamp,
-                    line: line.to_string(),
-                });
-                continue;
-            }
+        if let Some(caps) = new_ts_regex.captures(line)
+            && let Some(timestamp) = parse_datetime_to_unix(&caps[1])
+        {
+            lines.push(LogLine {
+                timestamp,
+                line: line.to_string(),
+            });
+            continue;
         }
 
         // 回退到旧格式

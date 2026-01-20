@@ -214,14 +214,7 @@ pub fn generate_gantt_charts(
     }
 
     // 计算需要的数字位数（根据轮次总数）
-    let total_rounds = rounds.len();
-    let width = if total_rounds >= 100 {
-        3
-    } else if total_rounds >= 10 {
-        2
-    } else {
-        1
-    };
+    let width = crate::utils::digit_width(rounds.len());
 
     for round in rounds {
         let round_flows_data = round_flows
@@ -291,13 +284,11 @@ fn generate_round_gantt(
         // 添加其他动作
         for operation in &flow.operations {
             // 如果这个 navigation 已经从 nav_start_ts 添加了，跳过（按时间戳匹配避免重复）
-            if operation.action_type == "navigation" {
-                if let (Some(nav_start), Some(op_start)) = (flow.nav_start_ts, operation.start_ts) {
-                    // 时间戳差异小于 0.01 秒认为是同一个导航
-                    if (nav_start - op_start).abs() < 0.01 {
-                        continue;
-                    }
-                }
+            if operation.action_type == "navigation"
+                && let (Some(nav_start), Some(op_start)) = (flow.nav_start_ts, operation.start_ts)
+                && (nav_start - op_start).abs() < 0.01
+            {
+                continue;
             }
             if let Some(op_start_ts) = operation.start_ts {
                 let op_start = op_start_ts - round.start_ts;
@@ -769,6 +760,63 @@ where
     Ok(())
 }
 
+/// 根据持续时间选择字体大小（4x 分辨率）
+fn select_font_size(duration: f64) -> i32 {
+    if duration > 15.0 {
+        88
+    } else if duration > 8.0 {
+        80
+    } else if duration > 2.0 {
+        72
+    } else {
+        64
+    }
+}
+
+/// 构建主标签文本
+fn build_label_text(step_type: &str, detail_info: &str, duration: f64) -> String {
+    // 手臂动作使用特殊格式
+    if step_type == "arm" {
+        return format!("{}-{:.1}s", detail_info, duration);
+    }
+
+    // 根据持续时间选择显示格式
+    if duration > 20.0 {
+        format!("{}\n总计:{:.1}s", detail_info, duration)
+    } else if duration > 10.0 {
+        format!("{} ({:.1}s)", detail_info, duration)
+    } else if duration > 5.0 {
+        let short_detail = truncate_str(detail_info, 10, 7);
+        format!("{} ({:.1}s)", short_detail, duration)
+    } else if duration > 2.0 {
+        let type_name = step_type_to_chinese(step_type);
+        format!("{} ({:.1}s)", type_name, duration)
+    } else {
+        format!("{:.1}s", duration)
+    }
+}
+
+/// 将步骤类型转换为中文名称
+fn step_type_to_chinese(step_type: &str) -> &'static str {
+    match step_type {
+        "nav" | "navigation" => "导航",
+        "preplan" => "预打舵",
+        "head" => "头部",
+        "waist" => "腰部",
+        _ => "动作",
+    }
+}
+
+/// 截断字符串（如果超过 max_len，截取 truncate_at 个字符并加省略号）
+fn truncate_str(s: &str, max_len: usize, truncate_at: usize) -> String {
+    if s.chars().count() > max_len {
+        let truncated: String = s.chars().take(truncate_at).collect();
+        format!("{}...", truncated)
+    } else {
+        s.to_string()
+    }
+}
+
 /// 绘制主标签
 fn draw_main_label<DB: DrawingBackend>(
     chart: &mut ChartContext<
@@ -789,47 +837,10 @@ where
     let text_y = y_pos + 0.08;
 
     // 创建主标签文本
-    // 手臂动作使用特殊格式: 手臂:{action_code}-{duration}s
-    let label_text = if step_type == "arm" {
-        format!("{}-{:.1}s", detail_info, duration)
-    } else if duration > 20.0 {
-        format!("{}\n总计:{:.1}s", detail_info, duration)
-    } else if duration > 10.0 {
-        format!("{} ({:.1}s)", detail_info, duration)
-    } else if duration > 5.0 {
-        let short_detail = if detail_info.chars().count() > 10 {
-            let truncated: String = detail_info.chars().take(7).collect();
-            format!("{}...", truncated)
-        } else {
-            detail_info.to_string()
-        };
-        format!("{} ({:.1}s)", short_detail, duration)
-    } else if duration > 2.0 {
-        format!(
-            "{} ({:.1}s)",
-            match step_type {
-                "nav" | "navigation" => "导航",
-                "preplan" => "预打舵",
-                "head" => "头部",
-                "waist" => "腰部",
-                _ => "动作",
-            },
-            duration
-        )
-    } else {
-        format!("{:.1}s", duration)
-    };
+    let label_text = build_label_text(step_type, detail_info, duration);
 
     // 选择字体大小（4x 分辨率）
-    let font_size = if duration > 15.0 {
-        88
-    } else if duration > 8.0 {
-        80
-    } else if duration > 2.0 {
-        72
-    } else {
-        64
-    };
+    let font_size = select_font_size(duration);
 
     // 绘制主标签
     if duration > 0.5 {
