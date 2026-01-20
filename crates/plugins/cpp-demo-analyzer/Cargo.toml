@@ -1,0 +1,21 @@
+[package]
+name = "cpp-demo-analyzer"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# 核心接口
+analyzer-core = { path = "../../analyzer-core" }
+abi_stable = { workspace = true }
+anyhow = { workspace = true }
+
+# C++ 互操作
+cxx = { workspace = true }
+
+[build-dependencies]
+cxx-build = { workspace = true }

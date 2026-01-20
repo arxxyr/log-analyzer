@@ -20,6 +20,15 @@ echo -e "${GREEN}编译配置: $PROFILE${NC}"
 
 # 项目根目录
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# 从 Cargo.toml 提取版本号
+VERSION=$(grep -A5 '^\[workspace\.package\]' "$ROOT_DIR/Cargo.toml" | grep '^version' | sed 's/.*= *"\([^"]*\)".*/\1/')
+if [ -z "$VERSION" ]; then
+    echo -e "${RED}错误: 无法从 Cargo.toml 提取版本号${NC}"
+    exit 1
+fi
+echo -e "${GREEN}版本号: v$VERSION${NC}"
+
 cd "$ROOT_DIR"
 
 # 目标目录
@@ -31,13 +40,13 @@ BIN_CONFIGS_DIR="$BIN_DIR/configs"
 TARGET_DIR="$ROOT_DIR/target/$PROFILE"
 CONFIGS_DIR="$ROOT_DIR/configs"
 
-echo -e "\n${YELLOW}[1/5] 清理旧的 bin 目录...${NC}"
+echo -e "\n${YELLOW}[1/6] 清理旧的 bin 目录...${NC}"
 if [ -d "$BIN_DIR" ]; then
     rm -rf "$BIN_DIR"
     echo -e "${GRAY}已删除旧目录: $BIN_DIR${NC}"
 fi
 
-echo -e "\n${YELLOW}[2/5] 创建目录结构...${NC}"
+echo -e "\n${YELLOW}[2/6] 创建目录结构...${NC}"
 mkdir -p "$BIN_DIR"
 mkdir -p "$BIN_PLUGINS_DIR"
 mkdir -p "$BIN_CONFIGS_DIR"
@@ -45,7 +54,7 @@ echo -e "${GRAY}已创建: bin/${NC}"
 echo -e "${GRAY}已创建: bin/plugins/${NC}"
 echo -e "${GRAY}已创建: bin/configs/${NC}"
 
-echo -e "\n${YELLOW}[3/5] 复制可执行文件...${NC}"
+echo -e "\n${YELLOW}[3/6] 复制可执行文件...${NC}"
 EXE_NAME="analyzer"
 EXE_PATH="$TARGET_DIR/$EXE_NAME"
 if [ -f "$EXE_PATH" ]; then
@@ -57,7 +66,7 @@ else
     exit 1
 fi
 
-echo -e "\n${YELLOW}[4/5] 复制插件...${NC}"
+echo -e "\n${YELLOW}[4/6] 复制插件...${NC}"
 PLUGIN_COUNT=0
 
 # 根据操作系统确定插件扩展名
@@ -88,7 +97,7 @@ for PLUGIN_NAME in "${PLUGIN_NAMES[@]}"; do
 done
 echo -e "${GREEN}成功复制 $PLUGIN_COUNT 个插件${NC}"
 
-echo -e "\n${YELLOW}[5/5] 复制配置文件...${NC}"
+echo -e "\n${YELLOW}[5/6] 复制配置文件...${NC}"
 if [ -d "$CONFIGS_DIR" ] && [ -r "$CONFIGS_DIR" ]; then
     CONFIG_COUNT=0
     # 复制所有文件（包括隐藏文件）
@@ -148,7 +157,24 @@ if [ -d "$BIN_CONFIGS_DIR" ]; then
     done
 fi
 
+echo -e "\n${YELLOW}[6/6] 创建版本压缩包...${NC}"
+ZIP_NAME="analyzer-v${VERSION}.zip"
+ZIP_PATH="$BIN_DIR/$ZIP_NAME"
+
+# 进入 bin 目录创建 zip（排除 zip 文件本身）
+cd "$BIN_DIR"
+# 删除旧的 zip 文件（如果存在）
+rm -f analyzer-v*.zip
+# 创建新的 zip 文件
+zip -r "$ZIP_NAME" . -x "*.zip"
+cd "$ROOT_DIR"
+
+echo -e "${GREEN}已创建: bin/$ZIP_NAME${NC}"
+
 echo -e "\n${GREEN}运行方式:${NC}"
 echo "  cd bin"
 echo "  ./analyzer"
+echo ""
+echo -e "${GREEN}分发方式:${NC}"
+echo "  将 bin/$ZIP_NAME 发送给用户"
 echo ""

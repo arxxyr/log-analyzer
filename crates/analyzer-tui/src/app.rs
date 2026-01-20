@@ -38,7 +38,10 @@ impl App {
     }
 
     /// 运行应用主循环
-    pub async fn run<B: Backend>(&mut self, terminal: &mut Terminal<B>) -> AppResult<()> {
+    pub async fn run<B: Backend>(&mut self, terminal: &mut Terminal<B>) -> AppResult<()>
+    where
+        <B as Backend>::Error: Send + Sync + 'static,
+    {
         // 在 async 上下文中创建事件处理器
         if self.events.is_none() {
             self.events = Some(EventHandler::new(Duration::from_millis(250)));
