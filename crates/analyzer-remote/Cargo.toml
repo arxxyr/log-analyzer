@@ -1,28 +1,28 @@
 [package]
 name = "analyzer-remote"
-version = "0.3.0"
-edition = "2024"
-authors = ["loosqk"]
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
 description = "远程连接和文件传输模块"
 
 [dependencies]
 # SSH 连接和传输
-ssh2 = "0.9"
+ssh2 = { workspace = true }
 
 # 错误处理
-thiserror = "2.0"
-anyhow = "1.0"
+thiserror = { workspace = true }
+anyhow = { workspace = true }
 
 # 日志
-tracing = "0.1"
+tracing = { workspace = true }
 
 # 序列化（用于配置）
-serde = { version = "1.0", features = ["derive"] }
+serde = { workspace = true }
 
 # 工具
-indicatif = "0.17"  # 进度条
+indicatif = { workspace = true }
 
 [dev-dependencies]
-# 测试
-tokio = { version = "1", features = ["full"] }
-tempfile = "3.8"
+tokio = { workspace = true }
+tempfile = { workspace = true }

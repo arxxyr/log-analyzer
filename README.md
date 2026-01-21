@@ -137,14 +137,18 @@ analyzer/
 │   ├── analyzer-core/            # 核心接口库（定义插件 API）
 │   ├── analyzer-cli/             # CLI 主程序（插件加载器）
 │   ├── analyzer-remote/          # 远程连接模块（SSH/SCP）
-│   └── analyzer-workflow/        # 工作流编排模块
-├── plugins/
-│   ├── master-control-analyzer/  # 机器人控制系统日志分析器
-│   └── cpp-demo-analyzer/        # C++ demo 插件示例
+│   ├── analyzer-workflow/        # 工作流编排模块
+│   ├── analyzer-tui/             # TUI 界面模块
+│   ├── analyzer-merger/          # 时间线合并模块
+│   ├── analyzer-visualizer/      # 可视化模块
+│   └── plugins/                  # 分析器插件
+│       ├── master-control-analyzer/  # 机器人控制系统日志分析器
+│       ├── arm-decision-analyzer/    # 机械臂决策日志分析器
+│       └── cpp-demo-analyzer/        # C++ demo 插件示例
 └── docs/
     ├── PLUGIN_ARCHITECTURE.md    # 插件开发文档
     ├── WORKFLOW_ARCHITECTURE.md  # 工作流架构文档
-    └── MIGRATION_GUIDE.md        # 迁移指南
+    └── TUI_GUIDE.md              # TUI 使用指南
 ```
 
 ## 🔌 内置插件

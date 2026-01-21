@@ -1,39 +1,40 @@
 [package]
 name = "analyzer-tui"
-version = "0.3.0"
-edition = "2024"
-authors = ["loosqk <loosqk@gmail.com>"]
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
 description = "TUI 界面模块 - 提供交互式终端界面"
 
 [dependencies]
 # TUI 框架
-ratatui = "0.29"
-crossterm = "0.29.0"
+ratatui = { workspace = true }
+crossterm = { workspace = true }
 
 # 异步运行时
-tokio = { version = "1.42", features = ["full"] }
-tokio-util = "0.7"
+tokio = { workspace = true }
+tokio-util = { workspace = true }
 
 # 通道和同步
-crossbeam-channel = "0.5"
-parking_lot = "0.12"
+crossbeam-channel = { workspace = true }
+parking_lot = { workspace = true }
 
 # 工作流和核心依赖
 analyzer-core = { path = "../analyzer-core" }
 analyzer-workflow = { path = "../analyzer-workflow" }
 
 # 错误处理
-anyhow = "1.0"
-thiserror = "2.0"
+anyhow = { workspace = true }
+thiserror = { workspace = true }
 
 # 日志
-tracing = "0.1"
+tracing = { workspace = true }
 
 # 序列化
-serde = { version = "1.0", features = ["derive"] }
+serde = { workspace = true }
 
 # 时间处理
-chrono = "0.4"
+chrono = { workspace = true }
 
 [dev-dependencies]
-tokio-test = "0.4"
+tokio-test = { workspace = true }

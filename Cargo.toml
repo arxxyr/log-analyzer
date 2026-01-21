@@ -8,9 +8,9 @@ members = [
     "crates/analyzer-merger",
     "crates/analyzer-visualizer",
     "crates/analyzer-tui",
-    "plugins/master-control-analyzer",
-    "plugins/arm-decision-analyzer",
-    "plugins/cpp-demo-analyzer",
+    "crates/plugins/master-control-analyzer",
+    "crates/plugins/arm-decision-analyzer",
+    "crates/plugins/cpp-demo-analyzer",
 ]
 
 [workspace.package]
@@ -28,22 +28,52 @@ anyhow = "1.0"
 thiserror = "2.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+serde_yaml = "0.9.34-deprecated"
 
 # CLI 相关
 clap = { version = "4.5.53", features = ["derive"] }
 
 # 插件加载
-libloading = "0.8"
+libloading = "0.9"
 
 # 日志分析常用
 regex = "1.12.2"
 csv = "1.4.0"
 chrono = { version = "0.4", features = ["serde"] }
+chrono-tz = "0.10"
 plotters = "0.3"
+glob = "0.3"
 
 # 日志记录
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# 异步运行时
+tokio = { version = "1.42", features = ["full"] }
+tokio-util = "0.7"
+
+# SSH 和远程连接
+ssh2 = "0.9"
+
+# 进度显示
+indicatif = "0.18"
+
+# TUI 相关
+ratatui = "0.30.0"
+crossterm = "0.29"
+crossbeam-channel = "0.5"
+parking_lot = "0.12"
+
+# 文件系统
+dirs = "6.0"
+
+# C++ 互操作
+cxx = "1.0"
+cxx-build = "1.0"
+
+# 测试依赖
+tempfile = "3.8"
+tokio-test = "0.4"
 
 [profile.release]
 opt-level = 3

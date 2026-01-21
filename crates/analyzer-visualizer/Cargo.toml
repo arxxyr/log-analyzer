@@ -27,7 +27,6 @@ chrono = { workspace = true }
 tracing = { workspace = true }
 
 # 文件系统和路径
-dirs = "6.0.0"
+dirs = { workspace = true }
 
 [dev-dependencies]
-# 测试

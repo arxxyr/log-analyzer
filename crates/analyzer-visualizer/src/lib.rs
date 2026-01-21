@@ -249,12 +249,7 @@ impl GanttChartGenerator {
         let mut sorted_tracks: Vec<(String, i32, Track, Vec<TimelineEvent>)> = track_map
             .into_iter()
             .map(|(key, (track, events))| {
-                let priority = self
-                    .config
-                    .track_priority
-                    .get(&key)
-                    .copied()
-                    .unwrap_or(999);
+                let priority = self.config.track_priority.get(&key).copied().unwrap_or(999);
                 (key, priority, track, events)
             })
             .collect();

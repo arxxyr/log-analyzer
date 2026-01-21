@@ -75,21 +75,22 @@ analyzer/
 │   ├── analyzer-merger/          # 时间线合并模块
 │   │   ├── Cargo.toml
 │   │   └── src/lib.rs            # 时间轴合并和对齐
-│   └── analyzer-visualizer/      # 可视化模块
-│       ├── Cargo.toml
-│       └── src/lib.rs            # 多泳道甘特图生成
-├── plugins/
-│   ├── master-control-analyzer/  # 机器人控制系统日志分析器
-│   │   ├── Cargo.toml            # crate-type = ["cdylib", "rlib"]
-│   │   └── src/
-│   │       ├── lib.rs            # 插件实现
-│   │       ├── models.rs
-│   │       ├── parser.rs
-│   │       ├── round_detector.rs
-│   │       ├── flow_detector.rs
-│   │       ├── csv_exporter.rs
-│   │       └── gantt.rs
-│   └── cpp-demo-analyzer/        # C++ demo 插件示例
+│   ├── analyzer-visualizer/      # 可视化模块
+│   │   ├── Cargo.toml
+│   │   └── src/lib.rs            # 多泳道甘特图生成
+│   └── plugins/                  # 分析器插件目录
+│       ├── master-control-analyzer/  # 机器人控制系统日志分析器
+│       │   ├── Cargo.toml            # crate-type = ["cdylib", "rlib"]
+│       │   └── src/
+│       │       ├── lib.rs            # 插件实现
+│       │       ├── models.rs
+│       │       ├── parser.rs
+│       │       ├── round_detector.rs
+│       │       ├── flow_detector.rs
+│       │       ├── csv_exporter.rs
+│       │       └── gantt.rs
+│       ├── arm-decision-analyzer/    # 机械臂决策日志分析器
+│       └── cpp-demo-analyzer/        # C++ demo 插件示例
 ├── docs/
 │   ├── PLUGIN_ARCHITECTURE.md    # 插件开发文档
 │   ├── WORKFLOW_ARCHITECTURE.md  # 工作流架构文档
@@ -477,9 +478,15 @@ cargo clippy -- -W clippy::all
 
 程序使用正则表达式匹配特定日志模式：
 - 时间戳: `[INFO/WARN/ERROR/DEBUG] [timestamp]` 格式
-- 轮次开始: `[发布日志节点]: [INFO] loop: 开始循环`
-- 轮次结束: `[发布日志节点]: [INFO] loop: 结束当前循环`
+- 初始循环开始: `[初始循环] ===== 初始循环开始（气密设备为空）=====`
+- 初始循环完成: `[初始循环] 初始循环完成，气密设备中有工件`
+- 常规循环开始: `[常规循环] 常规循环 N`
+- 常规循环完成: `[常规循环] 常规循环 N 放置完成`
+- 最终循环开始: `[最终循环] 最终循环：取出气密工件并放置`
+- 最终循环完成: `[最终循环] 最终循环完成`
 - 姿态信息: `[master_control]: 姿态字符串: {JSON格式的姿态数据}`
+
+> **注意**: 不再兼容旧格式（如 `[层级 X] 常规循环 N`、`loop: 开始循环` 等）
 
 ### 支持的动作类型
 
@@ -541,7 +548,7 @@ cargo clippy -- -W clippy::all
 
 1. **创建插件项目**
    ```bash
-   cd plugins
+   cd crates/plugins
    cargo new --lib my-analyzer
    ```
 
@@ -551,13 +558,13 @@ cargo clippy -- -W clippy::all
    crate-type = ["cdylib", "rlib"]
 
    [dependencies]
-   analyzer-core = { path = "../../crates/analyzer-core" }
-   abi_stable = "0.11"
+   analyzer-core = { path = "../../analyzer-core" }
+   abi_stable = { workspace = true }
    ```
 
 3. **实现 AnalyzerPlugin trait**
 4. **导出插件模块**（使用 `#[export_root_module]`）
-5. **编译并复制到 plugins 目录**
+5. **编译并复制到 bin/plugins 目录**
 
 ### 修改现有插件（master-control-analyzer）
 
@@ -698,7 +705,7 @@ logging:
    - 内部使用 Unix 时间戳（秒级精度）
    - 甘特图显示北京时间（UTC+8）
    - CSV 中的时间为相对于日志开始的秒数
-5. **轮次检测**: 基于循环标记（`loop: 开始循环` 和 `loop: 结束当前循环`）自动检测任务轮次
+5. **轮次检测**: 基于循环标记（`[初始循环]`、`[常规循环]`、`[最终循环]`）自动检测任务轮次
 6. **性能**: 对于大型日志文件（>100MB），建议使用 release 模式构建
 7. **依赖版本**: 使用 Rust edition 2024，主要依赖：
    - `abi_stable = "0.11"` - ABI 稳定性（核心依赖）
@@ -707,7 +714,7 @@ logging:
    - `plotters` - 图表生成
    - `csv` - 数据导出
    - `regex` - 模式匹配
-   - `ratatui = "0.29"` - TUI 框架（默认启用）
+   - `ratatui = "0.30"` - TUI 框架（默认启用）
    - `tokio = "1.42"` - 异步运行时
 8. **模块化设计**: 各模块职责清晰，修改时尽量保持单一职责原则（SRP），避免跨模块耦合
 9. **插件开发**:
