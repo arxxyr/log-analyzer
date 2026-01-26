@@ -70,14 +70,20 @@ pub fn detect_rounds(lines: &[LogLine], t_last: f64) -> Result<Vec<Round>> {
     // 姿态信息
     let pose_regex = Regex::new(r"\[master_control\]:\s*姿态字符串:\s*(\{.*\})")?;
 
-    // 暂停检测: 循环节点 main_loop: 检测到暂停标志，暂停等待恢复
-    let pause_regex = Regex::new(r"循环节点 main_loop: 检测到暂停标志，暂停等待恢复")?;
-    // 恢复检测: 恢复任务图: ...（从 PauseTaskNode 内部暂停恢复）
-    let resume_regex = Regex::new(r"恢复任务图:.*（从 PauseTaskNode 内部暂停恢复）")?;
+    // 暂停检测模式 1: PauseTaskNode[...]: 请求暂停任务，等待操作员 RESUME
+    let pause_regex = Regex::new(r"PauseTaskNode\[.*?\]:\s*请求暂停任务，等待操作员 RESUME")?;
+    // 恢复检测模式 1: PauseTaskNode[...]: 任务已恢复，继续执行
+    let resume_regex = Regex::new(r"PauseTaskNode\[.*?\]:\s*任务已恢复，继续执行")?;
+
+    // 暂停检测模式 2: TaskGraphExecutor: 节点 ... 失败，进入失败暂停状态
+    let fail_pause_regex = Regex::new(r"TaskGraphExecutor:\s*节点\s+\S+\s+失败，进入失败暂停状态")?;
+    // 恢复检测模式 2: TaskGraphExecutor: 重试节点 ...
+    let retry_resume_regex = Regex::new(r"TaskGraphExecutor:\s*重试节点\s+\S+")?;
 
     let mut rounds = Vec::new();
     let mut current: Option<Round> = None;
-    let mut pending_pause_ts: Option<f64> = None; // 待匹配恢复的暂停时间戳
+    let mut pending_pause_ts: Option<f64> = None; // 待匹配恢复的暂停时间戳（模式1）
+    let mut pending_fail_pause_ts: Option<f64> = None; // 待匹配恢复的失败暂停时间戳（模式2）
 
     for line in lines {
         // 检测初始循环开始
@@ -141,15 +147,35 @@ pub fn detect_rounds(lines: &[LogLine], t_last: f64) -> Result<Vec<Round>> {
             continue;
         }
 
-        // 检测暂停事件
+        // 检测暂停事件（模式1: PauseTaskNode）
         if pause_regex.is_match(&line.line) {
             pending_pause_ts = Some(line.timestamp);
             continue;
         }
 
-        // 检测恢复事件
+        // 检测恢复事件（模式1: PauseTaskNode）
         if resume_regex.is_match(&line.line) {
             if let Some(pause_ts) = pending_pause_ts.take() {
+                // 将暂停事件添加到当前轮次
+                if let Some(ref mut round) = current {
+                    round.pause_events.push(PauseEvent {
+                        pause_ts,
+                        resume_ts: Some(line.timestamp),
+                    });
+                }
+            }
+            continue;
+        }
+
+        // 检测失败暂停事件（模式2: 失败暂停状态）
+        if fail_pause_regex.is_match(&line.line) {
+            pending_fail_pause_ts = Some(line.timestamp);
+            continue;
+        }
+
+        // 检测重试恢复事件（模式2: 重试节点）
+        if retry_resume_regex.is_match(&line.line) {
+            if let Some(pause_ts) = pending_fail_pause_ts.take() {
                 // 将暂停事件添加到当前轮次
                 if let Some(ref mut round) = current {
                     round.pause_events.push(PauseEvent {
