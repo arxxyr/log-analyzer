@@ -269,7 +269,20 @@ fn generate_round_gantt(
         // 添加导航动作
         if let Some(nav_start_ts) = flow.nav_start_ts {
             let nav_start = nav_start_ts - round.start_ts;
-            let nav_duration = flow.nav_end_ts.map(|end| end - nav_start_ts).unwrap_or(1.0);
+            // 查找 operations 中对应的 navigation 操作以获取暂停事件
+            let nav_op = flow
+                .operations
+                .iter()
+                .find(|op| op.action_type == "navigation");
+            let nav_duration = if let Some(op) = nav_op {
+                if op.pause_events.is_empty() {
+                    flow.nav_end_ts.map(|end| end - nav_start_ts).unwrap_or(1.0)
+                } else {
+                    op.effective_duration()
+                }
+            } else {
+                flow.nav_end_ts.map(|end| end - nav_start_ts).unwrap_or(1.0)
+            };
 
             let label = format!("F{}-nav", flow_id);
             let detail_info = match flow.nav_target_pos.as_deref() {
@@ -298,7 +311,12 @@ fn generate_round_gantt(
             }
             if let Some(op_start_ts) = operation.start_ts {
                 let op_start = op_start_ts - round.start_ts;
-                let op_duration = operation.end_ts.map(|end| end - op_start_ts).unwrap_or(1.0);
+                // 使用有效持续时间（扣除暂停时间）
+                let op_duration = if operation.pause_events.is_empty() {
+                    operation.end_ts.map(|end| end - op_start_ts).unwrap_or(1.0)
+                } else {
+                    operation.effective_duration()
+                };
 
                 let (label, detail_info) = match operation.action_type.as_str() {
                     "arm" => {

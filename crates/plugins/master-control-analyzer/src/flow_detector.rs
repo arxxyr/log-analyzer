@@ -31,7 +31,7 @@ use std::collections::HashMap;
 use anyhow::Result;
 use regex::Regex;
 
-use crate::models::{ActionOperation, LogLine, NavigationFlow, Round, SubStep};
+use crate::models::{ActionOperation, LogLine, NavigationFlow, PauseEvent, Round, SubStep};
 use crate::round_detector::ts_to_round_id;
 
 /// 为指定类型的未完成 adapter 动作添加子步骤
@@ -117,6 +117,7 @@ fn new_action(
             name: initial_step_name,
             timestamp: start_ts,
         }],
+        pause_events: Vec::new(),
     }
 }
 
@@ -155,6 +156,10 @@ pub fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<Navigatio
     // ROS2ActionAdapter[xxx] - [RESULT] 完成，成功: 是, 消息: xxx
     let adapter_result_regex =
         Regex::new(r"ROS2ActionAdapter\[(\w+)\]\s*-\s*\[RESULT\]\s*完成，成功:\s*(\S+)")?;
+    // ROS2ActionAdapter[xxx] - 暂停（动作被暂停）
+    let adapter_pause_regex = Regex::new(r"ROS2ActionAdapter\[(\w+)\]\s*-\s*暂停")?;
+    // ROS2ActionAdapter[xxx] - 恢复（动作恢复执行）
+    let adapter_resume_regex = Regex::new(r"ROS2ActionAdapter\[(\w+)\]\s*-\s*恢复")?;
 
     // 预打舵相关正则（PrePlanNavigationNode 格式）
     // PrePlanNavigationNode[xxx] - 开始执行
@@ -347,6 +352,7 @@ pub fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<Navigatio
                             timestamp: line.timestamp,
                         },
                     ],
+                    pause_events: Vec::new(),
                 };
                 ctx.sub_actions.push(sub_action);
             }
@@ -674,6 +680,7 @@ pub fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<Navigatio
                             timestamp: line.timestamp,
                         },
                     ],
+                    pause_events: Vec::new(),
                 };
 
                 // 收集所有要添加的操作（主动作 + 子动作）
@@ -827,6 +834,49 @@ pub fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<Navigatio
                 format!("[RESULT] 完成，成功: {}", success),
                 line.timestamp,
             );
+            continue;
+        }
+
+        // ROS2ActionAdapter 暂停（记录暂停开始时间）
+        if let Some(caps) = adapter_pause_regex.captures(&line.line) {
+            let adapter_type = caps[1].to_string();
+            // 查找匹配类型的未完成动作，添加暂停事件
+            for (key, action) in active_adapters.iter_mut() {
+                if key.starts_with(&adapter_type) && action.end_ts.is_none() {
+                    // 添加暂停事件（恢复时间待填充）
+                    action.pause_events.push(PauseEvent {
+                        pause_ts: line.timestamp,
+                        resume_ts: None,
+                    });
+                    action.sub_steps.push(SubStep {
+                        name: "暂停".to_string(),
+                        timestamp: line.timestamp,
+                    });
+                    break;
+                }
+            }
+            continue;
+        }
+
+        // ROS2ActionAdapter 恢复（记录恢复时间）
+        if let Some(caps) = adapter_resume_regex.captures(&line.line) {
+            let adapter_type = caps[1].to_string();
+            // 查找匹配类型的未完成动作，更新最后一个暂停事件的恢复时间
+            for (key, action) in active_adapters.iter_mut() {
+                if key.starts_with(&adapter_type) && action.end_ts.is_none() {
+                    // 更新最后一个暂停事件的恢复时间
+                    if let Some(pause_event) = action.pause_events.last_mut()
+                        && pause_event.resume_ts.is_none()
+                    {
+                        pause_event.resume_ts = Some(line.timestamp);
+                    }
+                    action.sub_steps.push(SubStep {
+                        name: "恢复".to_string(),
+                        timestamp: line.timestamp,
+                    });
+                    break;
+                }
+            }
             continue;
         }
 

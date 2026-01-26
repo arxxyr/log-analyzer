@@ -114,6 +114,23 @@ pub struct ActionOperation {
     pub status: String,
     /// 子步骤列表
     pub sub_steps: Vec<SubStep>,
+    /// 暂停事件列表
+    pub pause_events: Vec<PauseEvent>,
+}
+
+impl ActionOperation {
+    /// 计算总暂停时间
+    pub fn total_pause_duration(&self) -> f64 {
+        self.pause_events.iter().map(|e| e.duration()).sum()
+    }
+
+    /// 计算有效持续时间（总时长减去暂停时间）
+    pub fn effective_duration(&self) -> f64 {
+        match (self.start_ts, self.end_ts) {
+            (Some(start), Some(end)) => (end - start - self.total_pause_duration()).max(0.0),
+            _ => 0.0,
+        }
+    }
 }
 
 /// 导航流程
