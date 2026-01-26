@@ -40,7 +40,7 @@ regex = "1.12.2"
 csv = "1.4.0"
 chrono = { version = "0.4", features = ["serde"] }
 chrono-tz = "0.10"
-plotters = "0.3"
+plotters = { version = "0.3", default-features = false, features = ["bitmap_encoder", "bitmap_backend", "line_series", "ab_glyph", "area_series"] }
 glob = "0.3"
 
 # 日志记录

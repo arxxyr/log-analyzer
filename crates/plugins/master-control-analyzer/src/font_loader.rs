@@ -9,9 +9,12 @@ use std::path::PathBuf;
 use std::sync::OnceLock;
 
 const FONT_NAME: &str = "SarasaTermSCNerd-Regular.ttf";
+const FONT_FAMILY: &str = "sarasa";
 
 /// 全局字体路径缓存
 static FONT_PATH: OnceLock<Option<PathBuf>> = OnceLock::new();
+/// 字体注册状态
+static FONT_REGISTERED: OnceLock<bool> = OnceLock::new();
 
 /// 字体加载器
 pub struct FontLoader {
@@ -21,9 +24,15 @@ pub struct FontLoader {
 impl FontLoader {
     /// 创建字体加载器
     ///
-    /// 从外部 fonts 目录查找字体文件
+    /// 从外部 fonts 目录查找字体文件并注册到 plotters
     pub fn new() -> Result<Self> {
-        let font_available = Self::find_font().is_ok();
+        let font_path = Self::find_font();
+        let font_available = font_path.is_ok();
+
+        // 注册字体到 plotters
+        if let Ok(path) = font_path {
+            Self::register_font(&path);
+        }
 
         Ok(Self { font_available })
     }
@@ -76,6 +85,39 @@ impl FontLoader {
             .context("未找到字体文件")
     }
 
+    /// 注册字体到 plotters
+    fn register_font(font_path: &PathBuf) {
+        FONT_REGISTERED.get_or_init(|| {
+            // 读取字体文件数据
+            match std::fs::read(font_path) {
+                Ok(font_data) => {
+                    // 使用 plotters 的 register_font 函数注册字体
+                    // 需要将数据泄漏为 'static 生命周期
+                    use plotters::style::FontStyle;
+                    let font_data_static: &'static [u8] = Box::leak(font_data.into_boxed_slice());
+                    match plotters::style::register_font(
+                        FONT_FAMILY,
+                        FontStyle::Normal,
+                        font_data_static,
+                    ) {
+                        Ok(()) => {
+                            eprintln!("[字体] 已注册字体: {}", FONT_FAMILY);
+                            true
+                        }
+                        Err(_) => {
+                            eprintln!("[字体] 注册字体失败");
+                            false
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("[字体] 读取字体文件失败: {}", e);
+                    false
+                }
+            }
+        });
+    }
+
     /// 获取字体文件路径（如果已找到）
     #[allow(dead_code)]
     pub fn font_path(&self) -> Option<&PathBuf> {
@@ -119,8 +161,8 @@ impl FontLoader {
     /// 字体描述符
     pub fn font_desc(&self, size: i32) -> FontDesc<'static> {
         if self.font_available {
-            // 使用 Sarasa Term SC Nerd 字体（支持中文）
-            ("Sarasa Term SC Nerd", size as f64).into()
+            // 使用已注册的字体（支持中文）
+            (FONT_FAMILY, size as f64).into()
         } else {
             // 回退到系统默认字体
             ("sans-serif", size as f64).into()
