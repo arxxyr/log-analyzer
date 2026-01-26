@@ -7,6 +7,11 @@
 //! - 自动插件选择
 //! - TUI 交互式界面（使用 --tui 启用）
 
+use mimalloc::MiMalloc;
+
+#[global_allocator]
+static GLOBAL: MiMalloc = MiMalloc;
+
 use abi_stable::std_types::RString;
 use analyzer_core::timeline::Track;
 use analyzer_core::*;

@@ -74,6 +74,9 @@ cxx-build = "1.0"
 tempfile = "3.8"
 tokio-test = "0.4"
 
+# 内存分配器
+mimalloc = "0.1"
+
 [profile.release]
 opt-level = 3
 lto = "thin"           # 使用 thin LTO（插件架构下 full LTO 不适用）

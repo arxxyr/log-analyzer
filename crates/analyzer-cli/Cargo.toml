@@ -45,6 +45,9 @@ tracing-subscriber = { workspace = true }
 # 异步运行时
 tokio = { workspace = true }
 
+# 内存分配器
+mimalloc = { workspace = true }
+
 [features]
 default = ["tui"]
 tui = ["analyzer-tui"]
