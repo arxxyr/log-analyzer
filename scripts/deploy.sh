@@ -35,26 +35,30 @@ cd "$ROOT_DIR"
 BIN_DIR="$ROOT_DIR/bin"
 BIN_PLUGINS_DIR="$BIN_DIR/plugins"
 BIN_CONFIGS_DIR="$BIN_DIR/configs"
+BIN_FONTS_DIR="$BIN_DIR/fonts"
 
 # 源目录
 TARGET_DIR="$ROOT_DIR/target/$PROFILE"
 CONFIGS_DIR="$ROOT_DIR/configs"
+FONTS_DIR="$ROOT_DIR/assests/fonts"
 
-echo -e "\n${YELLOW}[1/6] 清理旧的 bin 目录...${NC}"
+echo -e "\n${YELLOW}[1/7] 清理旧的 bin 目录...${NC}"
 if [ -d "$BIN_DIR" ]; then
     rm -rf "$BIN_DIR"
     echo -e "${GRAY}已删除旧目录: $BIN_DIR${NC}"
 fi
 
-echo -e "\n${YELLOW}[2/6] 创建目录结构...${NC}"
+echo -e "\n${YELLOW}[2/7] 创建目录结构...${NC}"
 mkdir -p "$BIN_DIR"
 mkdir -p "$BIN_PLUGINS_DIR"
 mkdir -p "$BIN_CONFIGS_DIR"
+mkdir -p "$BIN_FONTS_DIR"
 echo -e "${GRAY}已创建: bin/${NC}"
 echo -e "${GRAY}已创建: bin/plugins/${NC}"
 echo -e "${GRAY}已创建: bin/configs/${NC}"
+echo -e "${GRAY}已创建: bin/fonts/${NC}"
 
-echo -e "\n${YELLOW}[3/6] 复制可执行文件...${NC}"
+echo -e "\n${YELLOW}[3/7] 复制可执行文件...${NC}"
 EXE_NAME="analyzer"
 EXE_PATH="$TARGET_DIR/$EXE_NAME"
 if [ -f "$EXE_PATH" ]; then
@@ -66,7 +70,7 @@ else
     exit 1
 fi
 
-echo -e "\n${YELLOW}[4/6] 复制插件...${NC}"
+echo -e "\n${YELLOW}[4/7] 复制插件...${NC}"
 PLUGIN_COUNT=0
 
 # 根据操作系统确定插件扩展名
@@ -81,8 +85,6 @@ fi
 # 插件列表
 PLUGIN_NAMES=(
     "libmaster_control_analyzer.$PLUGIN_EXT"
-    "libarm_decision_analyzer.$PLUGIN_EXT"
-    "libcpp_demo_analyzer.$PLUGIN_EXT"
 )
 
 for PLUGIN_NAME in "${PLUGIN_NAMES[@]}"; do
@@ -97,11 +99,10 @@ for PLUGIN_NAME in "${PLUGIN_NAMES[@]}"; do
 done
 echo -e "${GREEN}成功复制 $PLUGIN_COUNT 个插件${NC}"
 
-echo -e "\n${YELLOW}[5/6] 复制配置文件...${NC}"
+echo -e "\n${YELLOW}[5/7] 复制配置文件...${NC}"
 if [ -d "$CONFIGS_DIR" ] && [ -r "$CONFIGS_DIR" ]; then
     CONFIG_COUNT=0
-    # 复制所有文件（包括隐藏文件）
-    shopt -s dotglob nullglob || true  # 包含隐藏文件，空目录不报错
+    shopt -s dotglob nullglob || true
     for SRC_FILE in "$CONFIGS_DIR"/*; do
         if [ -f "$SRC_FILE" ]; then
             cp "$SRC_FILE" "$BIN_CONFIGS_DIR/"
@@ -121,14 +122,32 @@ else
     echo -e "${YELLOW}请检查目录是否存在及权限设置${NC}"
 fi
 
+echo -e "\n${YELLOW}[6/7] 复制字体文件...${NC}"
+if [ -d "$FONTS_DIR" ] && [ -r "$FONTS_DIR" ]; then
+    FONT_COUNT=0
+    # 只复制 Regular 字体（其他变体可选）
+    FONT_FILE="$FONTS_DIR/SarasaTermSCNerd-Regular.ttf"
+    if [ -f "$FONT_FILE" ]; then
+        cp "$FONT_FILE" "$BIN_FONTS_DIR/"
+        echo -e "${GREEN}已复制: $(basename "$FONT_FILE")${NC}"
+        FONT_COUNT=$((FONT_COUNT + 1))
+    fi
+
+    if [ "$FONT_COUNT" -eq 0 ]; then
+        echo -e "${YELLOW}警告: 未找到字体文件${NC}"
+    else
+        echo -e "${GREEN}成功复制 $FONT_COUNT 个字体文件${NC}"
+    fi
+else
+    echo -e "${YELLOW}警告: 字体目录不存在 $FONTS_DIR${NC}"
+fi
+
 echo -e "\n${CYAN}=== 部署完成 ===${NC}"
-echo -e "\n${GRAY}提示: 字体已嵌入到 libmaster_control_analyzer.so 中（32MB）${NC}"
-echo -e "${GRAY}      首次运行时会自动提取到 bin/fonts/ 目录${NC}"
-echo -e "${GRAY}      字体目录会随程序一起打包，无需额外安装${NC}"
 echo -e "\n${GREEN}目录结构:${NC}"
 echo "bin/"
 echo "├── $EXE_NAME"
-echo "├── fonts/ (首次运行后自动生成)"
+echo "├── fonts/"
+echo "│   └── SarasaTermSCNerd-Regular.ttf"
 echo "├── plugins/"
 PLUGIN_FOUND_COUNT=0
 for PLUGIN_NAME in "${PLUGIN_NAMES[@]}"; do
@@ -157,7 +176,7 @@ if [ -d "$BIN_CONFIGS_DIR" ]; then
     done
 fi
 
-echo -e "\n${YELLOW}[6/6] 创建版本压缩包...${NC}"
+echo -e "\n${YELLOW}[7/7] 创建版本压缩包...${NC}"
 ZIP_NAME="analyzer-v${VERSION}.zip"
 ZIP_PATH="$BIN_DIR/$ZIP_NAME"
 

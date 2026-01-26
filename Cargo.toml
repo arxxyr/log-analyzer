@@ -9,15 +9,14 @@ members = [
     "crates/analyzer-visualizer",
     "crates/analyzer-tui",
     "crates/plugins/master-control-analyzer",
-    "crates/plugins/arm-decision-analyzer",
     "crates/plugins/cpp-demo-analyzer",
 ]
 
 [workspace.package]
-version = "0.3.0"
+version = "0.3.1"
 edition = "2024"
 authors = ["loosqk"]
-license = "MIT OR Apache-2.0"
+license = "Apache-2.0"
 
 [workspace.dependencies]
 # ABI 稳定性核心库

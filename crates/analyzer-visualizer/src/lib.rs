@@ -56,15 +56,13 @@ impl Default for VisualizationConfig {
         track_priority.insert("RoundMarker".to_string(), 0);
         track_priority.insert("Navigation".to_string(), 1);
         track_priority.insert("Arm".to_string(), 2);
-        track_priority.insert("ArmDecision".to_string(), 3);
-        track_priority.insert("Head".to_string(), 4);
-        track_priority.insert("Waist".to_string(), 5);
+        track_priority.insert("Head".to_string(), 3);
+        track_priority.insert("Waist".to_string(), 4);
 
         let mut track_colors = HashMap::new();
         track_colors.insert("RoundMarker".to_string(), "#E8F4F8".to_string());
         track_colors.insert("Navigation".to_string(), "#ADD8E6".to_string());
         track_colors.insert("Arm".to_string(), "#90EE90".to_string());
-        track_colors.insert("ArmDecision".to_string(), "#98FB98".to_string()); // 淡绿色
         track_colors.insert("Head".to_string(), "#FFB366".to_string());
         track_colors.insert("Waist".to_string(), "#DDA0DD".to_string());
 
@@ -286,7 +284,6 @@ impl GanttChartGenerator {
             Track::Custom(name) => {
                 // 自定义泳道的中文名称映射
                 match name.as_str() {
-                    "ArmDecision" => "手臂决策".to_string(),
                     "PrePlanNavigation" => "预打舵".to_string(),
                     _ => name.to_string(),
                 }
@@ -302,7 +299,6 @@ impl GanttChartGenerator {
             "机械臂" => Track::Arm,
             "头部" => Track::Head,
             "腰部" => Track::Waist,
-            "手臂决策" => Track::Custom("ArmDecision".into()),
             "预打舵" => Track::Custom("PrePlanNavigation".into()),
             _ => Track::Custom(name.into()),
         }

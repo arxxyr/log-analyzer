@@ -302,7 +302,6 @@ fn create_visualization_config(config: &AnalyzerConfig) -> VisualizationConfig {
         "#E8F4F8", // 浅蓝灰 - RoundMarker
         "#ADD8E6", // 浅蓝 - Navigation
         "#90EE90", // 浅绿 - Arm
-        "#98FB98", // 淡绿 - ArmDecision
         "#FFB366", // 浅橙 - Head
         "#DDA0DD", // 浅紫 - Waist
         "#FFE4B5", // 小麦色

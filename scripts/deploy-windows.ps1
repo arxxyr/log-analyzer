@@ -27,12 +27,14 @@ Write-Host "版本号: v$Version" -ForegroundColor Green
 $BinDir = Join-Path $RootDir "bin"
 $BinPluginsDir = Join-Path $BinDir "plugins"
 $BinConfigsDir = Join-Path $BinDir "configs"
+$BinFontsDir = Join-Path $BinDir "fonts"
 $TargetDir = Join-Path $RootDir "target\$Profile"
 $ConfigsDir = Join-Path $RootDir "configs"
+$FontsDir = Join-Path $RootDir "assests\fonts"
 
 # Step 1: 清理旧的 bin 目录
 Write-Host ""
-Write-Host "[1/6] 清理旧的 bin 目录..." -ForegroundColor Yellow
+Write-Host "[1/7] 清理旧的 bin 目录..." -ForegroundColor Yellow
 if (Test-Path $BinDir) {
     Remove-Item -Recurse -Force $BinDir
     Write-Host "  已删除旧目录: $BinDir" -ForegroundColor Gray
@@ -40,17 +42,19 @@ if (Test-Path $BinDir) {
 
 # Step 2: 创建目录结构
 Write-Host ""
-Write-Host "[2/6] 创建目录结构..." -ForegroundColor Yellow
+Write-Host "[2/7] 创建目录结构..." -ForegroundColor Yellow
 New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
 New-Item -ItemType Directory -Force -Path $BinPluginsDir | Out-Null
 New-Item -ItemType Directory -Force -Path $BinConfigsDir | Out-Null
+New-Item -ItemType Directory -Force -Path $BinFontsDir | Out-Null
 Write-Host "  已创建: bin/" -ForegroundColor Gray
 Write-Host "  已创建: bin/plugins/" -ForegroundColor Gray
 Write-Host "  已创建: bin/configs/" -ForegroundColor Gray
+Write-Host "  已创建: bin/fonts/" -ForegroundColor Gray
 
 # Step 3: 复制可执行文件
 Write-Host ""
-Write-Host "[3/6] 复制可执行文件..." -ForegroundColor Yellow
+Write-Host "[3/7] 复制可执行文件..." -ForegroundColor Yellow
 $ExeName = "analyzer.exe"
 $ExePath = Join-Path $TargetDir $ExeName
 if (Test-Path $ExePath) {
@@ -64,11 +68,9 @@ if (Test-Path $ExePath) {
 
 # Step 4: 复制插件
 Write-Host ""
-Write-Host "[4/6] 复制插件..." -ForegroundColor Yellow
+Write-Host "[4/7] 复制插件..." -ForegroundColor Yellow
 $PluginNames = @(
-    "master_control_analyzer.dll",
-    "arm_decision_analyzer.dll",
-    "cpp_demo_analyzer.dll"
+    "master_control_analyzer.dll"
 )
 $PluginCount = 0
 foreach ($PluginName in $PluginNames) {
@@ -85,7 +87,7 @@ Write-Host "  成功复制 $PluginCount 个插件" -ForegroundColor Green
 
 # Step 5: 复制配置文件
 Write-Host ""
-Write-Host "[5/6] 复制配置文件..." -ForegroundColor Yellow
+Write-Host "[5/7] 复制配置文件..." -ForegroundColor Yellow
 if (Test-Path $ConfigsDir) {
     $ConfigFiles = Get-ChildItem -Path $ConfigsDir -File
     $ConfigCount = 0
@@ -103,18 +105,30 @@ if (Test-Path $ConfigsDir) {
     Write-Host "  错误: 无法访问配置目录 $ConfigsDir" -ForegroundColor Red
 }
 
+# Step 6: 复制字体文件
+Write-Host ""
+Write-Host "[6/7] 复制字体文件..." -ForegroundColor Yellow
+if (Test-Path $FontsDir) {
+    $FontFile = Join-Path $FontsDir "SarasaTermSCNerd-Regular.ttf"
+    if (Test-Path $FontFile) {
+        Copy-Item $FontFile -Destination $BinFontsDir
+        Write-Host "  已复制: SarasaTermSCNerd-Regular.ttf" -ForegroundColor Green
+    } else {
+        Write-Host "  警告: 未找到字体文件" -ForegroundColor DarkYellow
+    }
+} else {
+    Write-Host "  警告: 字体目录不存在 $FontsDir" -ForegroundColor DarkYellow
+}
+
 # 部署完成提示
 Write-Host ""
 Write-Host "=== 部署完成 ===" -ForegroundColor Cyan
 Write-Host ""
-Write-Host "提示: 字体已嵌入到 master_control_analyzer.dll 中（32MB）" -ForegroundColor Gray
-Write-Host "      首次运行时会自动提取到 bin/fonts/ 目录" -ForegroundColor Gray
-Write-Host "      字体目录会随程序一起打包，无需额外安装" -ForegroundColor Gray
-Write-Host ""
 Write-Host "目录结构:" -ForegroundColor Green
 Write-Host "bin/"
 Write-Host "├── $ExeName"
-Write-Host "├── fonts/ (首次运行后自动生成)"
+Write-Host "├── fonts/"
+Write-Host "│   └── SarasaTermSCNerd-Regular.ttf"
 Write-Host "├── plugins/"
 
 # 显示插件列表
@@ -140,9 +154,9 @@ if (Test-Path $BinConfigsDir) {
     }
 }
 
-# Step 6: 创建版本压缩包
+# Step 7: 创建版本压缩包
 Write-Host ""
-Write-Host "[6/6] 创建版本压缩包..." -ForegroundColor Yellow
+Write-Host "[7/7] 创建版本压缩包..." -ForegroundColor Yellow
 $ZipName = "analyzer-v$Version.zip"
 $ZipPath = Join-Path $BinDir $ZipName
 

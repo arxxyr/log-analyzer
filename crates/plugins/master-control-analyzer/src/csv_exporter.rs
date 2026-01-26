@@ -62,7 +62,12 @@ impl RoundTimeInfo {
             Some(r) => {
                 let start_rel = to_rel_time(r.start_ts, t0);
                 let end_rel = r.end_ts.map(|ts| to_rel_time(ts, t0));
-                let duration = r.end_ts.map(|end| to_rel_time(end - r.start_ts, 0.0));
+                // 使用有效持续时间（扣除暂停时间）
+                let duration = if r.end_ts.is_some() {
+                    Some(to_rel_time(r.effective_duration(), 0.0))
+                } else {
+                    None
+                };
                 Self {
                     start_rel_s: Some(start_rel),
                     end_rel_s: end_rel,

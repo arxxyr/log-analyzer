@@ -5,6 +5,7 @@
 use std::collections::HashMap;
 
 use anyhow::Result;
+use csv;
 use plotters::prelude::*;
 use plotters::style::text_anchor::{HPos, Pos, VPos};
 
@@ -434,18 +435,18 @@ fn generate_round_gantt(
     };
 
     let mut chart = ChartBuilder::on(&root)
-        .caption(&title, ("sans-serif", 192))
+        .caption(&title, font_loader.font_desc(192))
         .margin(200)
         .x_label_area_size(400)
         .y_label_area_size(800)
         .build_cartesian_2d(0.0..max_time * 1.1, 0.0..(action_types.len() as f64))?;
 
-    // 配置网格和标签
+    // 配置网格和标签（使用 FontLoader 确保中文显示正常）
     let mut mesh = chart.configure_mesh();
     mesh.y_desc("动作类型")
         .x_desc("时间 (相对于轮次开始的秒数)")
-        .axis_desc_style(("sans-serif", 96))
-        .label_style(("sans-serif", 72))
+        .axis_desc_style(font_loader.font_desc(96))
+        .label_style(font_loader.font_desc(72))
         .y_labels(action_types.len() + 1) // 确保显示所有类型标签
         .y_label_formatter(&|y| {
             let idx = *y as usize;
@@ -861,7 +862,7 @@ where
 /// 生成常规循环耗时统计图
 ///
 /// 横坐标是每个已完成的常规循环序号，纵坐标是对应的有效耗时（扣除暂停时间）
-/// 同时绘制平均时间线
+/// 同时绘制平均时间线，并生成对应的 CSV 统计文件
 ///
 /// # 参数
 /// * `rounds` - 轮次切片
@@ -882,16 +883,30 @@ pub fn generate_cycle_duration_chart(rounds: &[Round], outdir: &str) -> Result<(
         return Ok(());
     }
 
-    // 计算每个循环的有效耗时
-    let durations: Vec<f64> = completed_normal_cycles
+    // 计算每个循环的时间数据：(总时间, 暂停时间, 有效时间)
+    let time_data: Vec<(f64, f64, f64)> = completed_normal_cycles
         .iter()
-        .map(|r| r.effective_duration())
+        .map(|r| {
+            let total = r.end_ts.map(|end| end - r.start_ts).unwrap_or(0.0);
+            let pause = r.total_pause_duration();
+            let effective = r.effective_duration();
+            (total, pause, effective)
+        })
         .collect();
+
+    // 提取有效耗时用于绘图
+    let durations: Vec<f64> = time_data.iter().map(|(_, _, eff)| *eff).collect();
 
     let cycle_count = durations.len();
     let avg_duration = durations.iter().sum::<f64>() / cycle_count as f64;
     let max_duration = durations.iter().cloned().fold(0.0_f64, f64::max);
     let min_duration = durations.iter().cloned().fold(f64::MAX, f64::min);
+
+    // 计算总暂停时间
+    let total_pause: f64 = time_data.iter().map(|(_, pause, _)| *pause).sum();
+
+    // 生成 CSV 统计文件
+    generate_cycle_duration_csv(&completed_normal_cycles, &time_data, outdir)?;
 
     // 图表尺寸
     let width = 1600u32;
@@ -901,11 +916,18 @@ pub fn generate_cycle_duration_chart(rounds: &[Round], outdir: &str) -> Result<(
     let root = BitMapBackend::new(&file_path, (width, height)).into_drawing_area();
     root.fill(&WHITE)?;
 
-    // 标题
-    let title = format!(
-        "常规循环耗时统计 (共{}个已完成循环，平均: {:.2}s)",
-        cycle_count, avg_duration
-    );
+    // 标题：明确说明是有效耗时（扣除暂停时间）
+    let title = if total_pause > 0.0 {
+        format!(
+            "常规循环有效耗时统计 (共{}个循环，平均: {:.2}s，总暂停: {:.2}s)",
+            cycle_count, avg_duration, total_pause
+        )
+    } else {
+        format!(
+            "常规循环耗时统计 (共{}个已完成循环，平均: {:.2}s)",
+            cycle_count, avg_duration
+        )
+    };
 
     // Y轴范围，留出一些余量
     let y_max = (max_duration * 1.15).max(avg_duration * 1.3);
@@ -1006,6 +1028,94 @@ pub fn generate_cycle_duration_chart(rounds: &[Round], outdir: &str) -> Result<(
     ))?;
 
     root.present()?;
+
+    Ok(())
+}
+
+/// 生成常规循环耗时统计 CSV 文件
+///
+/// # 参数
+/// * `cycles` - 已完成的常规循环列表
+/// * `time_data` - 每个循环的时间数据 (总时间, 暂停时间, 有效时间)
+/// * `outdir` - 输出目录
+fn generate_cycle_duration_csv(
+    cycles: &[&Round],
+    time_data: &[(f64, f64, f64)],
+    outdir: &str,
+) -> Result<()> {
+    use crate::models::CycleType;
+
+    let csv_path = format!("{}/cycle_duration_stats.csv", outdir);
+    let mut wtr = csv::Writer::from_path(&csv_path)?;
+
+    // 写入表头
+    wtr.write_record([
+        "序号",
+        "循环类型",
+        "轮次ID",
+        "总时间(s)",
+        "暂停时间(s)",
+        "有效时间(s)",
+        "暂停占比(%)",
+    ])?;
+
+    // 写入每个循环的数据
+    for (i, (round, (total, pause, effective))) in cycles.iter().zip(time_data.iter()).enumerate() {
+        let cycle_name = match &round.cycle_type {
+            CycleType::Normal(n) => format!("常规循环 {}", n),
+            CycleType::Initial => "初始循环".to_string(),
+            CycleType::Final => "最终循环".to_string(),
+        };
+
+        let pause_ratio = if *total > 0.0 {
+            pause / total * 100.0
+        } else {
+            0.0
+        };
+
+        wtr.write_record(&[
+            (i + 1).to_string(),
+            cycle_name,
+            round.id.to_string(),
+            format!("{:.3}", total),
+            format!("{:.3}", pause),
+            format!("{:.3}", effective),
+            format!("{:.1}", pause_ratio),
+        ])?;
+    }
+
+    // 写入汇总行
+    let total_sum: f64 = time_data.iter().map(|(t, _, _)| t).sum();
+    let pause_sum: f64 = time_data.iter().map(|(_, p, _)| p).sum();
+    let effective_sum: f64 = time_data.iter().map(|(_, _, e)| e).sum();
+    let avg_effective = effective_sum / cycles.len() as f64;
+    let pause_ratio_sum = if total_sum > 0.0 {
+        pause_sum / total_sum * 100.0
+    } else {
+        0.0
+    };
+
+    wtr.write_record(&[
+        "合计".to_string(),
+        format!("共{}个循环", cycles.len()),
+        "-".to_string(),
+        format!("{:.3}", total_sum),
+        format!("{:.3}", pause_sum),
+        format!("{:.3}", effective_sum),
+        format!("{:.1}", pause_ratio_sum),
+    ])?;
+
+    wtr.write_record(&[
+        "平均".to_string(),
+        "-".to_string(),
+        "-".to_string(),
+        format!("{:.3}", total_sum / cycles.len() as f64),
+        format!("{:.3}", pause_sum / cycles.len() as f64),
+        format!("{:.3}", avg_effective),
+        "-".to_string(),
+    ])?;
+
+    wtr.flush()?;
 
     Ok(())
 }

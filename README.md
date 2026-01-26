@@ -143,7 +143,6 @@ analyzer/
 │   ├── analyzer-visualizer/      # 可视化模块
 │   └── plugins/                  # 分析器插件
 │       ├── master-control-analyzer/  # 机器人控制系统日志分析器
-│       ├── arm-decision-analyzer/    # 机械臂决策日志分析器
 │       └── cpp-demo-analyzer/        # C++ demo 插件示例
 └── docs/
     ├── PLUGIN_ARCHITECTURE.md    # 插件开发文档
