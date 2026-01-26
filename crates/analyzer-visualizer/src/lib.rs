@@ -291,19 +291,6 @@ impl GanttChartGenerator {
         }
     }
 
-    /// 字符串转换为 Track
-    fn string_to_track(&self, name: &str) -> Track {
-        match name {
-            "轮次标记" => Track::RoundMarker,
-            "导航" => Track::Navigation,
-            "机械臂" => Track::Arm,
-            "头部" => Track::Head,
-            "腰部" => Track::Waist,
-            "预打舵" => Track::Custom("PrePlanNavigation".into()),
-            _ => Track::Custom(name.into()),
-        }
-    }
-
     /// 获取泳道颜色
     fn get_track_color(&self, track: &Track) -> String {
         let track_key = match track {

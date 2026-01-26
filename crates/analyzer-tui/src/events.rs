@@ -42,16 +42,12 @@ impl EventHandler {
                 if event::poll(tick_rate).unwrap_or(false) {
                     match event::read() {
                         Ok(CrosstermEvent::Key(key)) => {
-                            // Ctrl+C 或 Ctrl+D 或 q 退出
-                            if key.code == KeyCode::Char('c')
-                                && key.modifiers.contains(KeyModifiers::CONTROL)
-                            {
-                                let _ = sender.send(Event::Quit);
-                            } else if key.code == KeyCode::Char('d')
-                                && key.modifiers.contains(KeyModifiers::CONTROL)
-                            {
-                                let _ = sender.send(Event::Quit);
-                            } else if key.code == KeyCode::Char('q') {
+                            // Ctrl+C, Ctrl+D, 或 q 退出
+                            let is_ctrl_quit = key.modifiers.contains(KeyModifiers::CONTROL)
+                                && matches!(key.code, KeyCode::Char('c') | KeyCode::Char('d'));
+                            let is_q_quit = key.code == KeyCode::Char('q');
+
+                            if is_ctrl_quit || is_q_quit {
                                 let _ = sender.send(Event::Quit);
                             } else {
                                 let _ = sender.send(Event::Key(key));

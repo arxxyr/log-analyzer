@@ -14,7 +14,7 @@
 //! ```no_run
 //! use analyzer_core::*;
 //! use abi_stable::{
-//!     export_root_module, prefix_type::PrefixTypeTrait, sabi_extern_fn,
+//!     export_root_module, prefix_type::PrefixTypeTrait, rvec, sabi_extern_fn,
 //!     sabi_trait::prelude::TD_Opaque, std_types::*,
 //! };
 //!
@@ -28,7 +28,7 @@
 //!             version: "0.1.0".into(),
 //!             description: "My custom analyzer".into(),
 //!             author: "me".into(),
-//!             supported_extensions: vec![".log".into()],
+//!             supported_extensions: rvec![".log".into()],
 //!         }
 //!     }
 //!
@@ -36,7 +36,16 @@
 //!         // 实现分析逻辑
 //!         ROk(AnalyzeResult {
 //!             summary: "Analysis complete".into(),
-//!             output_files: vec![],
+//!             output_files: RVec::new(),
+//!             timeline: timeline::Timeline {
+//!                 name: "my-analyzer".into(),
+//!                 source_file: args.input_file.clone(),
+//!                 log_start_time: 0.0,
+//!                 log_end_time: 0.0,
+//!                 events: RVec::new(),
+//!                 is_primary: false,
+//!                 metadata: RNone,
+//!             },
 //!         })
 //!     }
 //! }

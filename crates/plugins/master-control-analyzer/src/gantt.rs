@@ -137,42 +137,55 @@ const SUBSTEP_COLOR_CONFIG: &[SubStepColorConfig] = &[
     },
 ];
 
+/// 精确匹配的子步骤颜色
+const SUBSTEP_EXACT_COLORS: &[(&str, RGBColor)] = &[
+    ("开始执行", RGBColor(100, 149, 237)),    // 矢车菊蓝
+    ("发送目标", RGBColor(255, 165, 0)),      // 橙色
+    ("执行中", RGBColor(135, 206, 250)),      // 淡天蓝
+    ("设置导航目标", RGBColor(70, 130, 180)), // 钢蓝
+    ("服务端接受", RGBColor(60, 179, 113)),   // 中海绿
+    ("结果回调", RGBColor(147, 112, 219)),    // 中紫色
+];
+
+/// 前缀匹配的子步骤颜色
+const SUBSTEP_PREFIX_COLORS: &[(&str, RGBColor)] = &[
+    ("执行完成", RGBColor(34, 139, 34)),         // 森林绿
+    ("发送导航目标", RGBColor(255, 165, 0)),     // 橙色
+    ("发送头部控制目标", RGBColor(255, 165, 0)), // 橙色
+    ("发送腰部控制目标", RGBColor(255, 165, 0)), // 橙色
+    ("动作完成", RGBColor(147, 112, 219)),       // 中紫色
+];
+
+/// 默认交替颜色列表
+const DEFAULT_ALTERNATING_COLORS: [RGBColor; 6] = [
+    RGBColor(144, 238, 144), // 淡绿
+    RGBColor(255, 218, 185), // 桃色
+    RGBColor(173, 216, 230), // 淡蓝
+    RGBColor(255, 182, 193), // 淡粉
+    RGBColor(221, 160, 221), // 淡紫
+    RGBColor(255, 255, 150), // 淡黄
+];
+
 /// 获取子步骤颜色
 fn get_substep_color(name: &str, index: usize) -> RGBColor {
-    // 检查特殊精确匹配
-    if name == "开始执行" {
-        return RGBColor(100, 149, 237); // 矢车菊蓝
-    }
-    if name == "发送目标" {
-        return RGBColor(255, 165, 0); // 橙色
-    }
-    if name == "执行中" {
-        return RGBColor(135, 206, 250); // 淡天蓝
-    }
-    if name.starts_with("执行完成") {
-        return RGBColor(34, 139, 34); // 森林绿
-    }
-    if name == "设置导航目标" {
-        return RGBColor(70, 130, 180); // 钢蓝
-    }
-    if name.starts_with("发送导航目标")
-        || name.starts_with("发送头部控制目标")
-        || name.starts_with("发送腰部控制目标")
-    {
-        return RGBColor(255, 165, 0); // 橙色
-    }
-    if name == "服务端接受" {
-        return RGBColor(60, 179, 113); // 中海绿
-    }
-    if name == "结果回调" || name.starts_with("动作完成") {
-        return RGBColor(147, 112, 219); // 中紫色
+    // 精确匹配
+    for (pattern, color) in SUBSTEP_EXACT_COLORS {
+        if name == *pattern {
+            return *color;
+        }
     }
 
-    // 检查模式匹配
+    // 前缀匹配
+    for (prefix, color) in SUBSTEP_PREFIX_COLORS {
+        if name.starts_with(prefix) {
+            return *color;
+        }
+    }
+
+    // 检查模式匹配（包含匹配）
     for config in SUBSTEP_COLOR_CONFIG {
         if name.contains(config.pattern) {
             if config.use_alternating {
-                // 使用交替颜色
                 return if index.is_multiple_of(2) {
                     config.color
                 } else {
@@ -184,15 +197,7 @@ fn get_substep_color(name: &str, index: usize) -> RGBColor {
     }
 
     // 默认：使用交替颜色增强分隔
-    let colors = [
-        RGBColor(144, 238, 144), // 淡绿
-        RGBColor(255, 218, 185), // 桃色
-        RGBColor(173, 216, 230), // 淡蓝
-        RGBColor(255, 182, 193), // 淡粉
-        RGBColor(221, 160, 221), // 淡紫
-        RGBColor(255, 255, 150), // 淡黄
-    ];
-    colors[index % colors.len()]
+    DEFAULT_ALTERNATING_COLORS[index % DEFAULT_ALTERNATING_COLORS.len()]
 }
 
 /// 生成所有轮次的甘特图
@@ -481,14 +486,16 @@ fn generate_round_gantt(
         if !sub_steps.is_empty() && *duration > 0.0 {
             draw_sub_steps(
                 &mut chart,
-                sub_steps,
-                round,
-                *start,
-                *duration,
-                y_pos + 0.15,
-                y_height,
-                &font_loader,
-                max_time,
+                SubStepDrawParams {
+                    sub_steps,
+                    round,
+                    start: *start,
+                    duration: *duration,
+                    sub_y_start: y_pos + 0.15,
+                    sub_y_height: y_height,
+                    font_loader: &font_loader,
+                    total_time_range: max_time,
+                },
             )?;
         }
 
@@ -520,24 +527,40 @@ fn generate_round_gantt(
     Ok(())
 }
 
+/// 子步骤绘制参数
+struct SubStepDrawParams<'a> {
+    sub_steps: &'a [SubStep],
+    round: &'a Round,
+    start: f64,
+    duration: f64,
+    sub_y_start: f64,
+    sub_y_height: f64,
+    font_loader: &'a FontLoader,
+    total_time_range: f64,
+}
+
 /// 绘制子步骤
+#[allow(clippy::too_many_arguments)]
 fn draw_sub_steps<DB: DrawingBackend>(
     chart: &mut ChartContext<
         DB,
         Cartesian2d<plotters::coord::types::RangedCoordf64, plotters::coord::types::RangedCoordf64>,
     >,
-    sub_steps: &[SubStep],
-    round: &Round,
-    start: f64,
-    duration: f64,
-    sub_y_start: f64,
-    sub_y_height: f64,
-    font_loader: &FontLoader,
-    total_time_range: f64, // 总时间范围，用于判断子步骤是否足够宽
+    params: SubStepDrawParams<'_>,
 ) -> Result<()>
 where
     DB::ErrorType: 'static,
 {
+    let SubStepDrawParams {
+        sub_steps,
+        round,
+        start,
+        duration,
+        sub_y_start,
+        sub_y_height,
+        font_loader,
+        total_time_range,
+    } = params;
     // 绘制每个子步骤之间的时间段
     for i in 0..sub_steps.len() {
         let sub_start_ts = sub_steps[i].timestamp;
@@ -676,29 +699,37 @@ const ACTION_STATE_SUFFIX_MAP: &[(&str, &str)] = &[
     ("ExecuteDoubleArmMove", "运动"),
 ];
 
-/// 从子步骤名称中提取简短的模块名称和时间（分开返回）
-/// 例如: "ExecuteGripperMotionAction (0.51s)" -> ("夹爪", "0.51s")
-fn extract_short_module_name(full_name: &str) -> (String, String) {
-    // 提取耗时信息（如果有）
-    let (name_part, time_part) = if let Some(paren_pos) = full_name.rfind(" (") {
-        // 提取括号内的时间，去掉括号
+/// 分离名称和时间部分
+/// 例如: "ExecuteGripperMotionAction (0.51s)" -> ("ExecuteGripperMotionAction", "0.51s")
+fn split_name_and_time(full_name: &str) -> (&str, &str) {
+    if let Some(paren_pos) = full_name.rfind(" (") {
         let time = &full_name[paren_pos + 2..full_name.len() - 1];
         let name = &full_name[..paren_pos];
         (name, time)
     } else {
         (full_name, "")
-    };
+    }
+}
+
+/// 截断字符串到指定字符数
+fn truncate_to_chars(s: &str, max_chars: usize) -> &str {
+    s.char_indices()
+        .nth(max_chars)
+        .map(|(i, _)| &s[..i])
+        .unwrap_or(s)
+}
+
+/// 从子步骤名称中提取简短的模块名称和时间（分开返回）
+/// 例如: "ExecuteGripperMotionAction (0.51s)" -> ("夹爪", "0.51s")
+fn extract_short_module_name(full_name: &str) -> (String, String) {
+    let (name_part, time_part) = split_name_and_time(full_name);
 
     // 处理 "XXX 开始/完成" 格式
-    if name_part.ends_with(" 开始") {
-        let module = name_part.trim_end_matches(" 开始");
-        let short = find_action_state_suffix(module).unwrap_or(module);
-        return (format!("{}▶", short), time_part.to_string());
-    }
-    if name_part.ends_with(" 完成") {
-        let module = name_part.trim_end_matches(" 完成");
-        let short = find_action_state_suffix(module).unwrap_or(module);
-        return (format!("{}✓", short), time_part.to_string());
+    for (suffix, symbol) in [(" 开始", "▶"), (" 完成", "✓")] {
+        if let Some(module) = name_part.strip_suffix(suffix) {
+            let short = find_action_state_suffix(module).unwrap_or(module);
+            return (format!("{}{}", short, symbol), time_part.to_string());
+        }
     }
 
     // 使用映射表查找简短名称
@@ -710,12 +741,7 @@ fn extract_short_module_name(full_name: &str) -> (String, String) {
 
     // 默认处理：如果名称太长，截取前8个字符
     let short_name = if name_part.chars().count() > 8 {
-        let end_idx = name_part
-            .char_indices()
-            .nth(8)
-            .map(|(i, _)| i)
-            .unwrap_or(name_part.len());
-        &name_part[..end_idx]
+        truncate_to_chars(name_part, 8)
     } else {
         name_part
     };

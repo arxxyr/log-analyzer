@@ -131,10 +131,10 @@ fn render_content(frame: &mut Frame, area: Rect, state: &AppState, scroll_offset
     }
 
     // 如果是错误状态，显示错误信息
-    if phase == WorkflowPhase::Error {
-        if let Some(error_msg) = state.error_message() {
-            render_error_popup(frame, area, &error_msg);
-        }
+    if phase == WorkflowPhase::Error
+        && let Some(error_msg) = state.error_message()
+    {
+        render_error_popup(frame, area, &error_msg);
     }
 }
 

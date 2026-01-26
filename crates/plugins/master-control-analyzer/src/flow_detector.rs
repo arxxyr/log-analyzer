@@ -98,6 +98,28 @@ struct BtNodeContext {
     sub_actions: Vec<ActionOperation>,
 }
 
+/// 创建新的动作操作
+fn new_action(
+    action_type: &str,
+    action_code: Option<u32>,
+    label: String,
+    start_ts: f64,
+    initial_step_name: String,
+) -> ActionOperation {
+    ActionOperation {
+        action_type: action_type.to_string(),
+        action_code,
+        label,
+        start_ts: Some(start_ts),
+        end_ts: None,
+        status: "pending".to_string(),
+        sub_steps: vec![SubStep {
+            name: initial_step_name,
+            timestamp: start_ts,
+        }],
+    }
+}
+
 /// 检测日志中的导航流程和动作操作
 ///
 /// 支持的日志格式：
@@ -359,18 +381,13 @@ pub fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<Navigatio
             let arm = caps[1].to_string();
             let open = caps[2].to_string();
             if let Some(ref mut ctx) = active_bt_node {
-                ctx.sub_actions.push(ActionOperation {
-                    action_type: "gripper".to_string(),
-                    action_code: None,
-                    label: format!("gripper({},{})", arm, open),
-                    start_ts: Some(line.timestamp),
-                    end_ts: None,
-                    status: "pending".to_string(),
-                    sub_steps: vec![SubStep {
-                        name: format!("gripper start arm={} open={}", arm, open),
-                        timestamp: line.timestamp,
-                    }],
-                });
+                ctx.sub_actions.push(new_action(
+                    "gripper",
+                    None,
+                    format!("gripper({},{})", arm, open),
+                    line.timestamp,
+                    format!("gripper start arm={} open={}", arm, open),
+                ));
             }
             continue;
         }
@@ -415,18 +432,13 @@ pub fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<Navigatio
                 // 如果还没有准备阶段，开始新的
                 if ready_pose_phase.is_none() {
                     ready_pose_phase = Some((line.timestamp, 1));
-                    ctx.sub_actions.push(ActionOperation {
-                        action_type: "ready_pose".to_string(),
-                        action_code: None,
-                        label: "准备阶段".to_string(),
-                        start_ts: Some(line.timestamp),
-                        end_ts: None,
-                        status: "pending".to_string(),
-                        sub_steps: vec![SubStep {
-                            name: "GetReadyPose #1 开始".to_string(),
-                            timestamp: line.timestamp,
-                        }],
-                    });
+                    ctx.sub_actions.push(new_action(
+                        "ready_pose",
+                        None,
+                        "准备阶段".to_string(),
+                        line.timestamp,
+                        "GetReadyPose #1 开始".to_string(),
+                    ));
                 } else {
                     // 增加计数
                     if let Some((_, ref mut count)) = ready_pose_phase {
@@ -478,18 +490,13 @@ pub fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<Navigatio
             let camera_id = caps[1].to_string();
             let obj_id = caps[2].to_string();
             if let Some(ref mut ctx) = active_bt_node {
-                ctx.sub_actions.push(ActionOperation {
-                    action_type: "det_obj_pose".to_string(),
-                    action_code: obj_id.parse().ok(),
-                    label: format!("DetObjPose({},{})", camera_id, obj_id),
-                    start_ts: Some(line.timestamp),
-                    end_ts: None,
-                    status: "pending".to_string(),
-                    sub_steps: vec![SubStep {
-                        name: format!("DetObjPose start cam={} obj={}", camera_id, obj_id),
-                        timestamp: line.timestamp,
-                    }],
-                });
+                ctx.sub_actions.push(new_action(
+                    "det_obj_pose",
+                    obj_id.parse().ok(),
+                    format!("DetObjPose({},{})", camera_id, obj_id),
+                    line.timestamp,
+                    format!("DetObjPose start cam={} obj={}", camera_id, obj_id),
+                ));
             }
             continue;
         }
@@ -528,18 +535,13 @@ pub fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<Navigatio
 
             let cmd = caps[1].to_string();
             if let Some(ref mut ctx) = active_bt_node {
-                ctx.sub_actions.push(ActionOperation {
-                    action_type: "obstacle".to_string(),
-                    action_code: cmd.parse().ok(),
-                    label: format!("ArmObstacle({})", cmd),
-                    start_ts: Some(line.timestamp),
-                    end_ts: None,
-                    status: "pending".to_string(),
-                    sub_steps: vec![SubStep {
-                        name: format!("ArmObstacle start cmd={}", cmd),
-                        timestamp: line.timestamp,
-                    }],
-                });
+                ctx.sub_actions.push(new_action(
+                    "obstacle",
+                    cmd.parse().ok(),
+                    format!("ArmObstacle({})", cmd),
+                    line.timestamp,
+                    format!("ArmObstacle start cmd={}", cmd),
+                ));
             }
             continue;
         }
@@ -567,18 +569,13 @@ pub fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<Navigatio
         if let Some(caps) = arm_transition_start_regex.captures(&line.line) {
             let cmd = caps[1].to_string();
             if let Some(ref mut ctx) = active_bt_node {
-                ctx.sub_actions.push(ActionOperation {
-                    action_type: "transition".to_string(),
-                    action_code: cmd.parse().ok(),
-                    label: format!("transition({})", cmd),
-                    start_ts: Some(line.timestamp),
-                    end_ts: None,
-                    status: "pending".to_string(),
-                    sub_steps: vec![SubStep {
-                        name: format!("transition start cmd={}", cmd),
-                        timestamp: line.timestamp,
-                    }],
-                });
+                ctx.sub_actions.push(new_action(
+                    "transition",
+                    cmd.parse().ok(),
+                    format!("transition({})", cmd),
+                    line.timestamp,
+                    format!("transition start cmd={}", cmd),
+                ));
             }
             continue;
         }
@@ -607,18 +604,13 @@ pub fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<Navigatio
         if let Some(caps) = arm_move_start_regex.captures(&line.line) {
             let cmd = caps[1].to_string();
             if let Some(ref mut ctx) = active_bt_node {
-                ctx.sub_actions.push(ActionOperation {
-                    action_type: "arm_move".to_string(),
-                    action_code: cmd.parse().ok(),
-                    label: format!("arm_move({})", cmd),
-                    start_ts: Some(line.timestamp),
-                    end_ts: None,
-                    status: "pending".to_string(),
-                    sub_steps: vec![SubStep {
-                        name: format!("arm_move start cmd={}", cmd),
-                        timestamp: line.timestamp,
-                    }],
-                });
+                ctx.sub_actions.push(new_action(
+                    "arm_move",
+                    cmd.parse().ok(),
+                    format!("arm_move({})", cmd),
+                    line.timestamp,
+                    format!("arm_move start cmd={}", cmd),
+                ));
             }
             continue;
         }
@@ -762,18 +754,13 @@ pub fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<Navigatio
                 _ => adapter_type.clone(),
             };
 
-            let action = ActionOperation {
-                action_type: action_type.to_string(),
+            let action = new_action(
+                action_type,
                 action_code,
                 label,
-                start_ts: Some(line.timestamp),
-                end_ts: None,
-                status: "pending".to_string(),
-                sub_steps: vec![SubStep {
-                    name: "开始执行".to_string(),
-                    timestamp: line.timestamp,
-                }],
-            };
+                line.timestamp,
+                "开始执行".to_string(),
+            );
 
             // 使用组合键：adapter_type + timestamp 以支持同类型的并发动作
             let key = format!("{}_{}", adapter_type, line.timestamp as u64);
@@ -919,18 +906,13 @@ pub fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<Navigatio
         // === 预打舵处理（PrePlanNavigationNode 格式）===
         if let Some(caps) = preplan_start_regex.captures(&line.line) {
             let action_label = caps[1].to_string();
-            let preplan_action = ActionOperation {
-                action_type: "preplan".to_string(),
-                action_code: None,
-                label: format!("预打舵[{}]", action_label),
-                start_ts: Some(line.timestamp),
-                end_ts: None,
-                status: "pending".to_string(),
-                sub_steps: vec![SubStep {
-                    name: "开始执行".to_string(),
-                    timestamp: line.timestamp,
-                }],
-            };
+            let preplan_action = new_action(
+                "preplan",
+                None,
+                format!("预打舵[{}]", action_label),
+                line.timestamp,
+                "开始执行".to_string(),
+            );
 
             // 确保有流程可以添加动作
             let round_id = ts_to_round_id(line.timestamp, rounds);

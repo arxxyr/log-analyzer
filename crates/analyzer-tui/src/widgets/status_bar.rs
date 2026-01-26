@@ -19,7 +19,7 @@ pub fn render(frame: &mut Frame, area: Rect, _state: &AppState) {
     )];
 
     // 快捷键提示
-    let shortcuts = vec![
+    let shortcuts = [
         ("Q", "退出"),
         ("P/Space", "暂停"),
         ("↑/↓", "滚动"),

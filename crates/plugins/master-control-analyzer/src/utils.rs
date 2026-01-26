@@ -23,12 +23,10 @@ use chrono::{DateTime, FixedOffset};
 /// assert_eq!(digit_width(123), 3);
 /// ```
 pub fn digit_width(n: usize) -> usize {
-    if n >= 100 {
-        3
-    } else if n >= 10 {
-        2
-    } else {
-        1
+    match n {
+        0..=9 => 1,
+        10..=99 => 2,
+        _ => 3,
     }
 }
 

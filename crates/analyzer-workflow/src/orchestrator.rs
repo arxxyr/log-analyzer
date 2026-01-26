@@ -125,6 +125,26 @@ impl WorkflowOrchestrator {
         })
     }
 
+    /// 尝试连接远程并记录结果
+    /// 如果启用了远程且连接成功，返回 Ok(true)
+    /// 如果未启用远程，返回 Ok(false)
+    /// 如果连接失败，添加错误到 result 并返回 Err
+    fn try_connect_remote(&mut self, result: &mut WorkflowResult) -> Result<bool> {
+        if !self.config.remote.enabled {
+            return Ok(false);
+        }
+
+        if let Err(e) = self.connect_remote() {
+            let error = format!("远程连接失败: {}", e);
+            warn!("{}", error);
+            result.add_error(error);
+            return Err(WorkflowError::ConnectionError(e.to_string()));
+        }
+
+        result.add_step(WorkflowStep::ConnectRemote);
+        Ok(true)
+    }
+
     /// 解析分析器使用的远程日志目录
     /// 1. 如果分析器配置了 remote_log_dir，使用它
     /// 2. 否则使用全局 remote.log_dir
@@ -148,8 +168,7 @@ impl WorkflowOrchestrator {
             });
 
         // 如果需要查找最新日期子目录
-        if use_latest_date_dir && self.remote_connection.is_some() {
-            let connection = self.remote_connection.as_mut().unwrap();
+        if use_latest_date_dir && let Some(connection) = self.remote_connection.as_mut() {
             match connection.find_latest_date_dir(&base_dir) {
                 Ok(Some(date_dir)) => {
                     info!("使用日期子目录: {}", date_dir);
@@ -178,14 +197,8 @@ impl WorkflowOrchestrator {
         let mut result = WorkflowResult::new();
 
         // 1. 连接远程（如果启用）
-        if self.config.remote.enabled {
-            if let Err(e) = self.connect_remote() {
-                let error = format!("远程连接失败: {}", e);
-                warn!("{}", error);
-                result.add_error(error);
-                return Ok(result);
-            }
-            result.add_step(WorkflowStep::ConnectRemote);
+        if self.try_connect_remote(&mut result).is_err() {
+            return Ok(result);
         }
 
         // 2. 发现并选择文件
@@ -226,14 +239,8 @@ impl WorkflowOrchestrator {
         let mut result = WorkflowResult::new();
 
         // 1. 连接远程（如果启用）
-        if self.config.remote.enabled {
-            if let Err(e) = self.connect_remote() {
-                let error = format!("远程连接失败: {}", e);
-                warn!("{}", error);
-                result.add_error(error);
-                return Ok(result);
-            }
-            result.add_step(WorkflowStep::ConnectRemote);
+        if self.try_connect_remote(&mut result).is_err() {
+            return Ok(result);
         }
 
         // 2. 遍历 auto_patterns，为每个模式发现和下载文件
@@ -272,9 +279,9 @@ impl WorkflowOrchestrator {
                 self.resolve_log_dir_for_analyzer(remote_log_dir.as_ref(), use_latest_date_dir)?;
 
             // 发现文件
-            let file_info_result = if self.config.remote.enabled && self.remote_connection.is_some()
+            let file_info_result = if self.config.remote.enabled
+                && let Some(connection) = self.remote_connection.as_mut()
             {
-                let connection = self.remote_connection.as_mut().unwrap();
                 self.discoverer
                     .discover_and_select_remote(connection, &effective_log_dir, pattern)
             } else {
@@ -395,7 +402,7 @@ impl WorkflowOrchestrator {
                 .unwrap_or("unknown")
                 .to_string();
 
-            let remote_path = PathBuf::from(self.config.remote.log_dir.clone()).join(&file_name);
+            let remote_path = self.config.remote.log_dir.clone().join(&file_name);
 
             let file_info = FileInfo {
                 path: remote_path,
@@ -460,7 +467,7 @@ impl WorkflowOrchestrator {
 
         self.connect_remote()?;
 
-        let remote_path = PathBuf::from(self.config.remote.log_dir.clone()).join(file_name);
+        let remote_path = self.config.remote.log_dir.clone().join(file_name);
 
         let file_info = FileInfo {
             path: remote_path,
@@ -526,16 +533,16 @@ impl WorkflowOrchestrator {
         });
 
         // 优先搜索远程（如果启用）
-        if self.config.remote.enabled && self.remote_connection.is_some() {
-            let connection = self.remote_connection.as_mut().unwrap();
-            if let Ok(file) = self.discoverer.discover_and_select_remote(
+        if self.config.remote.enabled
+            && let Some(connection) = self.remote_connection.as_mut()
+            && let Ok(file) = self.discoverer.discover_and_select_remote(
                 connection,
                 self.config.remote.log_dir.to_str().unwrap(),
                 &pattern,
-            ) {
-                info!("找到远程文件: {:?}", file.path);
-                return Ok(file);
-            }
+            )
+        {
+            info!("找到远程文件: {:?}", file.path);
+            return Ok(file);
         }
 
         // 远程未找到或未启用，搜索本地
@@ -566,27 +573,26 @@ impl WorkflowOrchestrator {
         let local_path = self.config.local.log_dir.join(&file_info.name);
 
         // 检查本地文件是否存在且相同（通过 mtime 和 size 判断）
-        if local_path.exists() {
-            if let Ok(metadata) = fs::metadata(&local_path) {
-                let local_size = metadata.len();
-                let local_mtime = metadata
-                    .modified()
-                    .ok()
-                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                    .map(|d| d.as_secs())
-                    .unwrap_or(0);
+        if local_path.exists()
+            && let Ok(metadata) = fs::metadata(&local_path)
+        {
+            let local_size = metadata.len();
+            let local_mtime = metadata
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
 
-                // 比较文件大小和修改时间
-                if file_info.size == local_size && file_info.mtime == local_mtime {
-                    info!("本地文件已存在且与远程相同，跳过下载: {:?}", local_path);
-                    return Ok(local_path);
-                } else {
-                    info!(
-                        "本地文件与远程不同 (本地: {}bytes/{}, 远程: {}bytes/{}), 重新下载",
-                        local_size, local_mtime, file_info.size, file_info.mtime
-                    );
-                }
+            // 比较文件大小和修改时间
+            if file_info.size == local_size && file_info.mtime == local_mtime {
+                info!("本地文件已存在且与远程相同，跳过下载: {:?}", local_path);
+                return Ok(local_path);
             }
+            info!(
+                "本地文件与远程不同 (本地: {}bytes/{}, 远程: {}bytes/{}), 重新下载",
+                local_size, local_mtime, file_info.size, file_info.mtime
+            );
         }
 
         info!("下载远程文件: {:?}", file_info.path);
