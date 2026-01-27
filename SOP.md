@@ -11,7 +11,7 @@
 
 ```bash
 # 自动获取并分析最新日志
-./analyzer auto
+./analyzer
 ```
 
 该命令自动完成：

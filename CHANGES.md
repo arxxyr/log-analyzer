@@ -1,109 +1,115 @@
-# TUI 默认启用 - 变更总结
+# 变更日志
 
-## 📅 更新时间
+本文件记录项目的所有重要变更。
 
-2025-10-13 (v0.3.0-beta.5)
+版本规范：[语义化版本 2.0.0](https://semver.org/lang/zh-CN/)
 
-## 🎯 主要变更
+---
 
-### 运行时行为
+## v0.3.3 (2026-01-27) - 当前版本
 
-**之前 (v0.3.0-alpha):**
+### CI/CD 优化
+
+- **构建缓存**：使用 Swatinem/rust-cache 替代 sccache（更稳定）
+- **平台支持**：移除 macOS x64 构建，只保留 ARM64
+- **语义化版本**：
+  - Release: `v0.3.3+abc123`（只有 commit hash）
+  - Dev: `v0.3.3+20260127.abc123`（日期 + commit hash）
+
+### 文档更新
+
+- 更新 SOP.md，移除 TUI 相关内容
+- 更新 README.md 和 CLAUDE.md，反映当前版本状态
+
+---
+
+## v0.3.2 (2026-01-27)
+
+### 功能修复
+
+- **暂停时间扣除**：修复 cycle_duration_stats.csv 和 cycle_duration_stats.png 中暂停时间未扣除的问题
+- **新增暂停检测模式**：支持 `TaskGraphExecutor: 用户请求暂停任务` 模式
+- **甘特图中文显示**：修复中文字符不显示问题
+
+### 性能优化
+
+- **mimalloc**：使用 mimalloc 作为全局内存分配器
+
+### 代码优化
+
+- 多处 clippy 警告修复
+- 代码简化与重构
+
+---
+
+## v0.3.1 (2026-01-26)
+
+### 功能增强
+
+- 字体目录整理：删除冗余的 `assests` 目录，统一使用 `fonts/`
+- Git 仓库瘦身：使用 git filter-repo 清理历史中的大文件
+- 部署脚本更新：修正字体路径
+
+---
+
+## v0.3.0 (2025-10)
+
+### 重大变更
+
+- **插件架构**：从单体应用重构为插件架构
+- **远程连接**：新增 SSH/SCP 支持（analyzer-remote）
+- **工作流编排**：配置驱动的自动化流程（analyzer-workflow）
+- **TUI 界面**：可选的交互式终端界面（analyzer-tui，使用 `--tui` 启用）
+- **时间线系统**：多日志源合并和统一可视化
+
+### 新增模块
+
+- `analyzer-core` - 插件接口定义
+- `analyzer-cli` - CLI 主程序
+- `analyzer-remote` - 远程连接模块
+- `analyzer-workflow` - 工作流编排模块
+- `analyzer-tui` - TUI 界面模块
+- `analyzer-merger` - 时间线合并模块
+- `analyzer-visualizer` - 可视化模块
+
+### CLI 变化
 
 ```bash
-./analyzer --tui  # 需要显式指定参数
-./analyzer        # 默认执行 auto 模式
-```
-
-**现在 (v0.3.0-beta.5):**
-
-```bash
-./analyzer              # 默认启动 TUI
-./analyzer auto         # CLI 模式
-./analyzer --no-tui auto  # 强制禁用 TUI
-```
-
-### 命令行参数
-
-| 参数 | 之前 | 现在 |
-|------|------|------|
-| 启动 TUI | `--tui` | *默认行为* |
-| 禁用 TUI | *不可用* | `--no-tui` |
-
-## 🔧 技术修复
-
-**Tokio 运行时错误：**
-
-将 `EventHandler` 创建延迟到 async 上下文，修改 `App.events` 为 `Option<EventHandler>`。
-
-## 🚀 使用示例
-
-```bash
-# 交互式使用（推荐）
+# 默认行为：自动模式
 ./analyzer
 
-# CLI 模式
-./analyzer --no-tui auto
-./analyzer analyze -i logs/test.log -o output
+# 子命令
+./analyzer auto           # 自动获取并分析
+./analyzer analyze        # 分析指定文件
+./analyzer list-remote    # 列出远程文件
+./analyzer download       # 下载文件
+./analyzer list-plugins   # 列出插件
+./analyzer check-config   # 验证配置
+./analyzer multi          # 多文件分析
 
-# 精简部署
-cargo build --release --no-default-features
+# TUI 模式（可选）
+./analyzer --tui
 ```
 
-## 🔧 TUI 优化历史
+---
 
-### v0.3.0-beta.5 - 进度显示
+## v0.2.0 (2025-09)
 
-**问题：** beta.4 禁用了进度条但无替代方案
+### 重大变更
 
-**解决：**
-
-- 实现 `download_with_callback()` 自定义进度回调
-- 创建 `TuiProgressCallback` 集成到 AppState
-- 手动控制下载流程，完整显示进度（0%-100%）
-
-### v0.3.0-beta.4 - 布局修复
-
-**问题：** `indicatif::ProgressBar` 直接输出到 stdout 破坏 TUI 布局
-
-**解决：**
-
-- TUI 模式下禁用 indicatif 进度条
-- 静默插件输出（注释 100+ println）
-- 简化摘要显示（≤40 字符/行，前 5 个完整 + 前 3 个不完整）
-
-### v0.3.0-beta.3 - 日志优化
-
-- 减少进度更新频率（25% -> 1 次）
-- 汇总显示甘特图/CSV 数量
-- 优化摘要格式适配窗口
+- **架构重构**：从单体应用改为插件架构
+- **CLI 变化**：新的命令行接口
+- **构建方式**：使用 workspace 管理多个包
+- **插件系统**：支持动态加载多个分析器
 
 ---
 
-## 📦 Release Notes (v0.3.0-beta.5)
+## v0.1.0 (2025-08)
 
-### 核心功能
+### 初始版本
 
-- ✅ TUI 默认启用，`./analyzer` 直接启动
-- ✅ 下载进度显示（0%-100%）+ 实时进度条
-- ✅ 插件输出静默（100+ println 已注释）
-- ✅ 智能摘要显示（紧凑格式，前 5 完整 + 前 3 不完整）
-
-### 技术改进
-
-- 自定义进度回调机制（`download_with_callback()`）
-- TUI 进度回调集成到 AppState
-- 每 25% 更新一次日志，避免刷屏
-- 编译完全无警告
-
-### 兼容性
-
-- ✅ 所有 CLI 子命令保持不变
-- ✅ `--no-tui` 强制使用 CLI 模式
-- ✅ 输出文件格式向后兼容
-
----
-
-**版本：** v0.3.0-beta.5
-**状态：** Ready for testing
-**版本规范：** [语义化版本 2.0.0](https://semver.org/lang/zh-CN/)
+- 基础日志分析功能
+- 轮次检测
+- 导航流程分析
+- CSV 导出
+- 甘特图生成
