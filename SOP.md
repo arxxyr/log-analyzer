@@ -9,22 +9,6 @@
 
 ## 快速开始
 
-### 方式一：TUI 交互式界面（推荐）
-
-```bash
-# 直接启动 TUI 界面
-./analyzer
-```
-
-**TUI 操作**：
-- 界面自动显示工作流进度和日志
-- **Tab** 键切换主区域和插件面板
-- 在插件面板中按 **↑/↓** 选择插件，**空格** 切换启用状态
-- 按 **Enter** 重启工作流（使用新的插件配置）
-- 按 **q** 或 **ESC** 退出
-
-### 方式二：自动化命令（一键执行）
-
 ```bash
 # 自动获取并分析最新日志
 ./analyzer auto
@@ -132,6 +116,7 @@ open round_1_gantt.png       # macOS
 
 颜色说明：
 - **浅蓝色** - 导航动作
+- **浅橙色** - 预打舵
 - **浅绿色** - 机械臂动作
 - **浅橙色** - 头部控制
 - **浅紫色** - 腰部控制
@@ -173,12 +158,6 @@ cargo build --package master-control-analyzer --release
 ```bash
 # 使用自定义配置
 ./analyzer --config my_config.yaml auto
-```
-
-### 禁用 TUI 界面
-```bash
-# 使用 CLI 模式（无交互式界面）
-./analyzer --no-tui auto
 ```
 
 ### 批量分析
