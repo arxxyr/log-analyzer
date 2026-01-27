@@ -40,7 +40,7 @@ BIN_FONTS_DIR="$BIN_DIR/fonts"
 # 源目录
 TARGET_DIR="$ROOT_DIR/target/$PROFILE"
 CONFIGS_DIR="$ROOT_DIR/configs"
-FONTS_DIR="$ROOT_DIR/assests/fonts"
+FONTS_DIR="$ROOT_DIR/fonts"
 
 echo -e "\n${YELLOW}[1/7] 清理旧的 bin 目录...${NC}"
 if [ -d "$BIN_DIR" ]; then

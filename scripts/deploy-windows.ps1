@@ -30,7 +30,7 @@ $BinConfigsDir = Join-Path $BinDir "configs"
 $BinFontsDir = Join-Path $BinDir "fonts"
 $TargetDir = Join-Path $RootDir "target\$Profile"
 $ConfigsDir = Join-Path $RootDir "configs"
-$FontsDir = Join-Path $RootDir "assests\fonts"
+$FontsDir = Join-Path $RootDir "fonts"
 
 # Step 1: 清理旧的 bin 目录
 Write-Host ""

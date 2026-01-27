@@ -90,12 +90,15 @@ analyzer/
 │       │       ├── csv_exporter.rs
 │       │       └── gantt.rs
 │       └── cpp-demo-analyzer/        # C++ demo 插件示例
+├── fonts/
+│   └── SarasaTermSCNerd-Regular.ttf  # 中文字体（甘特图标签用）
 ├── docs/
 │   ├── PLUGIN_ARCHITECTURE.md    # 插件开发文档
 │   ├── WORKFLOW_ARCHITECTURE.md  # 工作流架构文档
 │   └── TUI_GUIDE.md              # TUI 使用指南
 ├── scripts/
-│   └── test_tui.sh               # TUI 测试脚本
+│   ├── deploy.sh                 # Linux/macOS 部署脚本
+│   └── deploy-windows.ps1        # Windows 部署脚本
 └── 其他文件
     ├── analyze.sh                # 旧版 Shell 脚本（兼容层）
     ├── CHANGES.md                # 变更历史
