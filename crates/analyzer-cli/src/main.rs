@@ -418,7 +418,7 @@ fn run_multi_file_analysis(
 
     // 按主时间轴优先排序：先分析 is_primary=true 的任务
     let mut sorted_tasks: Vec<_> = tasks.to_vec();
-    sorted_tasks.sort_by(|a, b| b.is_primary.cmp(&a.is_primary));
+    sorted_tasks.sort_by_key(|t| std::cmp::Reverse(t.is_primary));
 
     for task in &sorted_tasks {
         info!(
@@ -1352,7 +1352,7 @@ fn main() -> Result<()> {
                 .collect();
 
             // 主时间轴优先
-            files_with_priority.sort_by(|a, b| b.2.cmp(&a.2));
+            files_with_priority.sort_by_key(|f| std::cmp::Reverse(f.2));
 
             // 3. 分析每个文件并收集时间线（责任链模式）
             let mut timelines = Vec::new();
