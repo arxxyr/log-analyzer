@@ -10,8 +10,33 @@ use plotters::prelude::*;
 use plotters::style::text_anchor::{HPos, Pos, VPos};
 
 use crate::font_loader::FontLoader;
-use crate::models::{NavigationFlow, Round, SubStep};
+use crate::models::{NavigationFlow, PauseEvent, Round, SubStep};
 use crate::utils::timestamp_to_beijing_time;
+
+/// 计算在指定时间点之前的累计暂停时间
+///
+/// 用于压缩时间轴，删除暂停期间的空白时间
+fn pause_time_before(pause_events: &[PauseEvent], round_start: f64, ts: f64) -> f64 {
+    pause_events
+        .iter()
+        .map(|e| {
+            let pause_start = e.pause_ts;
+            let pause_end = e.resume_ts.unwrap_or(ts);
+
+            if ts <= pause_start {
+                // 时间点在暂停开始之前，不计算
+                0.0
+            } else if ts >= pause_end {
+                // 时间点在暂停结束之后，计算完整暂停时间
+                (pause_end - pause_start).max(0.0)
+            } else {
+                // 时间点在暂停期间，计算部分暂停时间
+                (ts - pause_start).max(0.0)
+            }
+        })
+        .sum::<f64>()
+        .min(ts - round_start) // 确保不超过总时间
+}
 
 /// 动作类型配置（顺序、显示名称、颜色）
 const ACTION_TYPE_CONFIG: &[(&str, &str, RGBColor)] = &[
@@ -268,7 +293,10 @@ fn generate_round_gantt(
 
         // 添加导航动作
         if let Some(nav_start_ts) = flow.nav_start_ts {
-            let nav_start = nav_start_ts - round.start_ts;
+            // 计算压缩后的开始时间（扣除之前的暂停时间）
+            let pause_before = pause_time_before(&round.pause_events, round.start_ts, nav_start_ts);
+            let nav_start = (nav_start_ts - round.start_ts - pause_before).max(0.0);
+
             // 查找 operations 中对应的 navigation 操作以获取暂停事件
             let nav_op = flow
                 .operations
@@ -293,7 +321,7 @@ fn generate_round_gantt(
             chart_data.push((
                 label,
                 detail_info,
-                nav_start.max(0.0),
+                nav_start,
                 nav_duration.max(0.0),
                 "navigation".to_string(),
                 flow.nav_sub_steps.clone(),
@@ -310,7 +338,11 @@ fn generate_round_gantt(
                 continue;
             }
             if let Some(op_start_ts) = operation.start_ts {
-                let op_start = op_start_ts - round.start_ts;
+                // 计算压缩后的开始时间（扣除之前的暂停时间）
+                let pause_before =
+                    pause_time_before(&round.pause_events, round.start_ts, op_start_ts);
+                let op_start = (op_start_ts - round.start_ts - pause_before).max(0.0);
+
                 // 使用有效持续时间（扣除暂停时间）
                 let op_duration = if operation.pause_events.is_empty() {
                     operation.end_ts.map(|end| end - op_start_ts).unwrap_or(1.0)
@@ -910,8 +942,13 @@ where
 ///
 /// # 参数
 /// * `rounds` - 轮次切片
+/// * `flows` - 导航流程切片（用于获取动作级别的暂停时间）
 /// * `outdir` - 输出目录
-pub fn generate_cycle_duration_chart(rounds: &[Round], outdir: &str) -> Result<()> {
+pub fn generate_cycle_duration_chart(
+    rounds: &[Round],
+    flows: &[NavigationFlow],
+    outdir: &str,
+) -> Result<()> {
     use crate::models::CycleType;
 
     let font_loader = FontLoader::default();
@@ -928,12 +965,24 @@ pub fn generate_cycle_duration_chart(rounds: &[Round], outdir: &str) -> Result<(
     }
 
     // 计算每个循环的时间数据：(总时间, 暂停时间, 有效时间)
+    // 注意：暂停时间需要同时统计轮次级别和动作级别的暂停
     let time_data: Vec<(f64, f64, f64)> = completed_normal_cycles
         .iter()
         .map(|r| {
             let total = r.end_ts.map(|end| end - r.start_ts).unwrap_or(0.0);
-            let pause = r.total_pause_duration();
-            let effective = r.effective_duration();
+            // 轮次级别的暂停时间
+            let round_pause = r.total_pause_duration();
+            // 动作级别的暂停时间（从 flows 中获取该轮次的所有动作）
+            let action_pause: f64 = flows
+                .iter()
+                .filter(|f| f.round_id == r.id)
+                .flat_map(|f| f.operations.iter())
+                .map(|op| op.total_pause_duration())
+                .sum();
+            // 总暂停时间（取两者的最大值，因为动作暂停通常与轮次暂停重叠）
+            // 实际上，如果动作暂停被检测到但轮次暂停没有，应该使用动作暂停
+            let pause = round_pause.max(action_pause);
+            let effective = (total - pause).max(0.0);
             (total, pause, effective)
         })
         .collect();

@@ -80,10 +80,22 @@ pub fn detect_rounds(lines: &[LogLine], t_last: f64) -> Result<Vec<Round>> {
     // 恢复检测模式 2: TaskGraphExecutor: 重试节点 ...
     let retry_resume_regex = Regex::new(r"TaskGraphExecutor:\s*重试节点\s+\S+")?;
 
+    // 暂停检测模式 3: ROS2ActionAdapter[xxx] - 暂停（动作被暂停）
+    let adapter_pause_regex = Regex::new(r"ROS2ActionAdapter\[\w+\]\s*-\s*暂停")?;
+    // 恢复检测模式 3: ROS2ActionAdapter[xxx] - 恢复（动作恢复执行）
+    let adapter_resume_regex = Regex::new(r"ROS2ActionAdapter\[\w+\]\s*-\s*恢复")?;
+
+    // 暂停检测模式 4: TaskGraphExecutor: 用户请求暂停任务 xxx
+    let user_pause_regex = Regex::new(r"TaskGraphExecutor:\s*用户请求暂停任务\s+\S+")?;
+    // 恢复检测模式 4: TaskGraphExecutor: 恢复任务 xxx
+    let user_resume_regex = Regex::new(r"TaskGraphExecutor:\s*恢复任务\s+\S+")?;
+
     let mut rounds = Vec::new();
     let mut current: Option<Round> = None;
     let mut pending_pause_ts: Option<f64> = None; // 待匹配恢复的暂停时间戳（模式1）
     let mut pending_fail_pause_ts: Option<f64> = None; // 待匹配恢复的失败暂停时间戳（模式2）
+    let mut pending_adapter_pause_ts: Option<f64> = None; // 待匹配恢复的动作暂停时间戳（模式3）
+    let mut pending_user_pause_ts: Option<f64> = None; // 待匹配恢复的用户暂停时间戳（模式4）
 
     for line in lines {
         // 检测初始循环开始
@@ -176,6 +188,46 @@ pub fn detect_rounds(lines: &[LogLine], t_last: f64) -> Result<Vec<Round>> {
         // 检测重试恢复事件（模式2: 重试节点）
         if retry_resume_regex.is_match(&line.line) {
             if let Some(pause_ts) = pending_fail_pause_ts.take() {
+                // 将暂停事件添加到当前轮次
+                if let Some(ref mut round) = current {
+                    round.pause_events.push(PauseEvent {
+                        pause_ts,
+                        resume_ts: Some(line.timestamp),
+                    });
+                }
+            }
+            continue;
+        }
+
+        // 检测动作暂停事件（模式3: ROS2ActionAdapter 暂停）
+        if adapter_pause_regex.is_match(&line.line) {
+            pending_adapter_pause_ts = Some(line.timestamp);
+            continue;
+        }
+
+        // 检测动作恢复事件（模式3: ROS2ActionAdapter 恢复）
+        if adapter_resume_regex.is_match(&line.line) {
+            if let Some(pause_ts) = pending_adapter_pause_ts.take() {
+                // 将暂停事件添加到当前轮次
+                if let Some(ref mut round) = current {
+                    round.pause_events.push(PauseEvent {
+                        pause_ts,
+                        resume_ts: Some(line.timestamp),
+                    });
+                }
+            }
+            continue;
+        }
+
+        // 检测用户暂停事件（模式4: 用户请求暂停任务）
+        if user_pause_regex.is_match(&line.line) {
+            pending_user_pause_ts = Some(line.timestamp);
+            continue;
+        }
+
+        // 检测用户恢复事件（模式4: 恢复任务）
+        if user_resume_regex.is_match(&line.line) {
+            if let Some(pause_ts) = pending_user_pause_ts.take() {
                 // 将暂停事件添加到当前轮次
                 if let Some(ref mut round) = current {
                     round.pause_events.push(PauseEvent {

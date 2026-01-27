@@ -177,8 +177,8 @@ fn run_analysis_internal(input_file: &str, output_dir: &str) -> Result<AnalyzeRe
         description: "动作时间轴汇总表".into(),
     });
 
-    // 生成常规循环耗时统计图
-    gantt::generate_cycle_duration_chart(&rounds, output_dir)?;
+    // 生成常规循环耗时统计图（传入 flows 以获取动作级别的暂停时间）
+    gantt::generate_cycle_duration_chart(&rounds, &flows, output_dir)?;
     output_files.push(OutputFile {
         path: format!("{}/cycle_duration_stats.png", output_dir).into(),
         file_type: "png".into(),
