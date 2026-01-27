@@ -240,6 +240,10 @@ jobs:
           FULL_VERSION="${TAG_VERSION}+${BUILD_META}"
           echo "full_version=$FULL_VERSION" >> $GITHUB_OUTPUT
 
+          # 构建日期
+          BUILD_DATE=$(date -u +%Y-%m-%d)
+          echo "build_date=$BUILD_DATE" >> $GITHUB_OUTPUT
+
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
@@ -269,7 +273,7 @@ jobs:
           body: |
             ## 版本信息
             - **版本号**: ${{ steps.version.outputs.full_version }}
-            - **构建日期**: $(date -u +%Y-%m-%d)
+            - **构建日期**: ${{ steps.version.outputs.build_date }}
             - **Commit**: ${{ github.sha }}
 
             ## 下载
