@@ -110,11 +110,23 @@ jobs:
           BASE_VERSION=$(grep -A5 '^\[workspace\.package\]' Cargo.toml | grep '^version' | sed 's/.*= *"\([^"]*\)".*/\1/')
           echo "base_version=$BASE_VERSION" >> $GITHUB_OUTPUT
 
-          # 生成构建元数据: 日期.commit短哈希
-          BUILD_DATE=$(date -u +%Y%m%d)
+          # commit 短哈希
           SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
-          BUILD_META="${BUILD_DATE}.${SHORT_SHA}"
+          echo "short_sha=$SHORT_SHA" >> $GITHUB_OUTPUT
+
+          # 根据触发类型生成不同的构建元数据
+          # Release (tag): v0.3.2+abc123
+          # Dev (push): v0.3.2+20260127.abc123
+          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            BUILD_META="${SHORT_SHA}"
+            BUILD_TYPE="release"
+          else
+            BUILD_DATE=$(date -u +%Y%m%d)
+            BUILD_META="${BUILD_DATE}.${SHORT_SHA}"
+            BUILD_TYPE="dev"
+          fi
           echo "build_meta=$BUILD_META" >> $GITHUB_OUTPUT
+          echo "build_type=$BUILD_TYPE" >> $GITHUB_OUTPUT
 
           # 完整版本号
           FULL_VERSION="v${BASE_VERSION}+${BUILD_META}"
@@ -125,6 +137,7 @@ jobs:
           echo "package_name=$PACKAGE_NAME" >> $GITHUB_OUTPUT
 
           echo "=== Version Info ==="
+          echo "Build Type: $BUILD_TYPE"
           echo "Base Version: $BASE_VERSION"
           echo "Build Meta: $BUILD_META"
           echo "Full Version: $FULL_VERSION"
@@ -199,7 +212,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # 生成版本信息（与 build job 保持一致）
+      # 生成版本信息（Release 版只用 commit hash，不带日期）
       - name: Generate version info
         id: version
         run: |
@@ -207,10 +220,9 @@ jobs:
           TAG_VERSION="${GITHUB_REF#refs/tags/}"
           echo "tag_version=$TAG_VERSION" >> $GITHUB_OUTPUT
 
-          # 生成构建元数据
-          BUILD_DATE=$(date -u +%Y%m%d)
+          # Release 版构建元数据：只有 commit hash
           SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
-          BUILD_META="${BUILD_DATE}.${SHORT_SHA}"
+          BUILD_META="${SHORT_SHA}"
           echo "build_meta=$BUILD_META" >> $GITHUB_OUTPUT
 
           # 完整版本号（用于 release 标题）
