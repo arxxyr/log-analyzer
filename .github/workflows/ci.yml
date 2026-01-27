@@ -90,13 +90,6 @@ jobs:
             exe_suffix: ".exe"
             plugin_ext: "dll"
             plugin_prefix: ""
-          # macOS x64 (Intel)
-          - os: macos-latest
-            target: x86_64-apple-darwin
-            platform: macos-x64
-            exe_suffix: ""
-            plugin_ext: "dylib"
-            plugin_prefix: "lib"
           # macOS ARM64 (Apple Silicon)
           - os: macos-latest
             target: aarch64-apple-darwin
@@ -282,7 +275,6 @@ jobs:
             ## 下载
             - Linux x64: `analyzer-${{ steps.version.outputs.full_version }}-linux-x64.tar.gz`
             - Windows x64: `analyzer-${{ steps.version.outputs.full_version }}-windows-x64.zip`
-            - macOS x64: `analyzer-${{ steps.version.outputs.full_version }}-macos-x64.tar.gz`
             - macOS ARM64: `analyzer-${{ steps.version.outputs.full_version }}-macos-arm64.tar.gz`
 
   # ============ Dev 构建通知 ============
