@@ -51,9 +51,6 @@ use analyzer_tui::{App, AppState, run_tui};
 #[cfg(feature = "tui")]
 use analyzer_remote::TransferProgress;
 
-#[cfg(feature = "tui")]
-use tokio;
-
 // ============================================================================
 // 命令行参数
 // ============================================================================
@@ -357,8 +354,7 @@ fn run_analysis_with_context(
 
     // 准备分析参数
     let extra_args = context
-        .map(|ctx| serde_json::to_string(ctx).ok())
-        .flatten()
+        .and_then(|ctx| serde_json::to_string(ctx).ok())
         .map(RString::from);
 
     let analyze_args = AnalyzeArgs {
@@ -396,15 +392,15 @@ fn extract_round_time_ranges(timeline: &timeline::Timeline) -> Vec<RoundTimeRang
     let mut round_id = 0;
 
     for event in timeline.events.iter() {
-        if event.track == Track::RoundMarker {
-            if let ROption::RSome(end) = &event.end_time {
-                round_id += 1;
-                ranges.push(RoundTimeRange {
-                    round_id,
-                    start: event.start_time,
-                    end: *end,
-                });
-            }
+        if event.track == Track::RoundMarker
+            && let ROption::RSome(end) = &event.end_time
+        {
+            round_id += 1;
+            ranges.push(RoundTimeRange {
+                round_id,
+                start: event.start_time,
+                end: *end,
+            });
         }
     }
 
@@ -505,7 +501,7 @@ fn merge_and_visualize(
     info!("生成统一甘特图: {}", output_path.display());
 
     // 从配置文件动态创建可视化配置
-    let vis_config = create_visualization_config(&config);
+    let vis_config = create_visualization_config(config);
     let generator = GanttChartGenerator::new(vis_config);
 
     generator.generate_gantt_chart(
@@ -1168,10 +1164,10 @@ fn main() -> Result<()> {
         Some(Commands::Auto { pattern, output }) => {
             // 如果提供了覆盖参数，更新配置
             let mut config = config;
-            if let Some(p) = pattern {
-                if let Some(first_analyzer) = config.analyzers.first_mut() {
-                    first_analyzer.pattern = p;
-                }
+            if let Some(p) = pattern
+                && let Some(first_analyzer) = config.analyzers.first_mut()
+            {
+                first_analyzer.pattern = p;
             }
             if let Some(o) = output {
                 config.local.output_dir = o;
@@ -1322,12 +1318,12 @@ fn main() -> Result<()> {
                     if let Ok(entries) = fs::read_dir(&config.local.log_dir) {
                         for entry in entries.flatten() {
                             let path = entry.path();
-                            if let Some(file_name) = path.file_name().and_then(|n| n.to_str()) {
-                                if glob_match::glob_match(pattern, file_name) {
-                                    files_to_analyze.push((path.clone(), pattern.clone()));
-                                    info!("找到本地文件: {}", path.display());
-                                    break; // 只取第一个匹配的文件
-                                }
+                            if let Some(file_name) = path.file_name().and_then(|n| n.to_str())
+                                && glob_match::glob_match(pattern, file_name)
+                            {
+                                files_to_analyze.push((path.clone(), pattern.clone()));
+                                info!("找到本地文件: {}", path.display());
+                                break; // 只取第一个匹配的文件
                             }
                         }
                     }

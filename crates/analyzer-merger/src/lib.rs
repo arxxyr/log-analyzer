@@ -307,7 +307,7 @@ mod tests {
             track,
             name: format!("Event {}", id).into(),
             start_time: start,
-            end_time: end.map(|t| t.into()).into(),
+            end_time: end.into(),
             status: EventStatus::Success,
             source: source.into(),
             parent_id: RNone,

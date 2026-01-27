@@ -100,10 +100,7 @@ impl FileTransfer {
 
         // 打开远程文件
         let mut remote_file = sftp.open(remote_path).map_err(|e| {
-            SshError::IoError(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!("打开远程文件失败: {}", e),
-            ))
+            SshError::IoError(std::io::Error::other(format!("打开远程文件失败: {}", e)))
         })?;
 
         // 创建本地文件
@@ -222,10 +219,7 @@ impl FileTransfer {
 
         // 创建远程文件
         let mut remote_file = sftp.create(remote_path).map_err(|e| {
-            SshError::IoError(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!("创建远程文件失败: {}", e),
-            ))
+            SshError::IoError(std::io::Error::other(format!("创建远程文件失败: {}", e)))
         })?;
 
         // 传输
