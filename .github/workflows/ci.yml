@@ -14,6 +14,8 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: "-D warnings"
+  SCCACHE_GHA_ENABLED: "true"
+  RUSTC_WRAPPER: "sccache"
 
 jobs:
   # ============ 代码检查 ============
@@ -42,10 +44,8 @@ jobs:
         with:
           components: clippy
 
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: "clippy"
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.7
 
       - name: Run Clippy
         run: cargo clippy --all --all-targets -- -D warnings
@@ -61,10 +61,8 @@ jobs:
       - name: Install Rust nightly
         uses: dtolnay/rust-toolchain@nightly
 
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: "test"
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.7
 
       - name: Run tests
         run: cargo test --all --release
@@ -115,10 +113,8 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: "build-${{ matrix.os }}"
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.7
 
       # 生成版本信息
       - name: Generate version info
@@ -286,6 +282,8 @@ jobs:
             ## 下载
             - Linux x64: `analyzer-${{ steps.version.outputs.full_version }}-linux-x64.tar.gz`
             - Windows x64: `analyzer-${{ steps.version.outputs.full_version }}-windows-x64.zip`
+            - macOS x64: `analyzer-${{ steps.version.outputs.full_version }}-macos-x64.tar.gz`
+            - macOS ARM64: `analyzer-${{ steps.version.outputs.full_version }}-macos-arm64.tar.gz`
 
   # ============ Dev 构建通知 ============
   dev-build-summary:
