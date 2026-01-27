@@ -15,7 +15,7 @@ impl PluginSelector {
     /// 创建插件选择器
     pub fn new(mut mappings: Vec<AnalyzerMapping>) -> Self {
         // 按优先级排序（高优先级在前）
-        mappings.sort_by(|a, b| b.priority.cmp(&a.priority));
+        mappings.sort_by_key(|m| std::cmp::Reverse(m.priority));
 
         Self { mappings }
     }
