@@ -130,7 +130,7 @@ jobs:
         shell: bash
         run: |
           . "$HOME/.cargo/env"
-          cargo build --release
+          cargo build --release --workspace
 
       - name: Compress binaries with UPX
         run: |
@@ -150,7 +150,7 @@ jobs:
           mkdir -p package/plugins package/configs package/fonts
 
           cp target/release/analyzer package/
-          cp target/release/libmaster_control_analyzer.so package/plugins/ || true
+          cp target/release/libmaster_control_analyzer.so package/plugins/
           cp -r configs/* package/configs/ || true
           cp -r fonts/* package/fonts/ || true
 
@@ -237,7 +237,7 @@ jobs:
           echo "Full Version: $FULL_VERSION"
 
       - name: Build release
-        run: cargo build --release --target ${{ matrix.target }}
+        run: cargo build --release --workspace --target ${{ matrix.target }}
 
       # UPX 压缩（仅 Windows）
       - name: Install UPX (Windows)
@@ -273,7 +273,7 @@ jobs:
           cp target/${{ matrix.target }}/release/analyzer package/
 
           PLUGIN_NAME="${{ matrix.plugin_prefix }}master_control_analyzer.${{ matrix.plugin_ext }}"
-          cp "target/${{ matrix.target }}/release/${PLUGIN_NAME}" package/plugins/ || true
+          cp "target/${{ matrix.target }}/release/${PLUGIN_NAME}" package/plugins/
 
           cp -r configs/* package/configs/ || true
           cp -r fonts/* package/fonts/ || true
@@ -294,7 +294,7 @@ jobs:
           Copy-Item target/${{ matrix.target }}/release/analyzer.exe package/
 
           $pluginName = "${{ matrix.plugin_prefix }}master_control_analyzer.${{ matrix.plugin_ext }}"
-          Copy-Item "target/${{ matrix.target }}/release/$pluginName" package/plugins/ -ErrorAction SilentlyContinue
+          Copy-Item "target/${{ matrix.target }}/release/$pluginName" package/plugins/
 
           Copy-Item configs/* package/configs/ -ErrorAction SilentlyContinue
           Copy-Item fonts/* package/fonts/ -ErrorAction SilentlyContinue
