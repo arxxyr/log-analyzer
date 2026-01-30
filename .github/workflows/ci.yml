@@ -136,7 +136,12 @@ jobs:
         run: |
           echo "=== 构建产物 ==="
           ls -lh target/release/analyzer
-          ls -lh target/release/libmaster_control_analyzer.so
+          echo "=== 搜索所有 master_control 相关文件 ==="
+          find target -name "*master_control*" -not -path "*/build/*" -not -path "*/.fingerprint/*"
+          echo "=== target/release 中的库文件 ==="
+          ls -lh target/release/*.so target/release/*.a target/release/*.dylib 2>/dev/null || echo "无库文件"
+          echo "=== target/release/deps 中的插件 ==="
+          ls -lh target/release/deps/*master_control* 2>/dev/null || echo "deps中无插件"
 
       - name: Compress binaries with UPX
         run: |
