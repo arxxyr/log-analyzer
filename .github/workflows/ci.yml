@@ -14,6 +14,9 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: "-D warnings"
+  CARGO_INCREMENTAL: 0        # release 构建关闭增量，配合 LTO 优化
+  CARGO_NET_RETRY: 10         # 网络重试次数
+  RUST_BACKTRACE: short
 
 jobs:
   # ============ 代码检查 ============
@@ -52,7 +55,7 @@ jobs:
   test:
     name: Test
     runs-on: ubuntu-latest
-    needs: [fmt, clippy]
+    needs: [clippy]
     steps:
       - uses: actions/checkout@v4
 
@@ -157,6 +160,35 @@ jobs:
 
       - name: Build release
         run: cargo build --release --target ${{ matrix.target }}
+
+      # UPX 压缩（Linux/Windows）
+      - name: Install UPX (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get install -y upx-ucl
+
+      - name: Install UPX (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: choco install upx -y
+
+      - name: Compress binaries with UPX
+        if: runner.os != 'macOS'
+        shell: bash
+        run: |
+          EXE="target/${{ matrix.target }}/release/analyzer${{ matrix.exe_suffix }}"
+          PLUGIN="${{ matrix.plugin_prefix }}master_control_analyzer.${{ matrix.plugin_ext }}"
+          PLUGIN_PATH="target/${{ matrix.target }}/release/${PLUGIN}"
+
+          echo "=== 压缩前 ==="
+          ls -lh "$EXE" || true
+          ls -lh "$PLUGIN_PATH" || true
+
+          upx --best --lzma "$EXE" || true
+          upx --best --lzma "$PLUGIN_PATH" || true
+
+          echo "=== 压缩后 ==="
+          ls -lh "$EXE" || true
+          ls -lh "$PLUGIN_PATH" || true
 
       # 打包产物 (Linux/macOS)
       - name: Package artifacts (Unix)
