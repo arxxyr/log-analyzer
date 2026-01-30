@@ -6,10 +6,10 @@ name: CI
 
 on:
   push:
-    branches: [main, master]
+    branches: [main, master, develop]
     tags: ["v*"]
   pull_request:
-    branches: [main, master]
+    branches: [main, master, develop]
 
 env:
   CARGO_TERM_COLOR: always
@@ -290,7 +290,7 @@ jobs:
     name: Dev Build Summary
     runs-on: ubuntu-latest
     needs: [build]
-    if: github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop'
     steps:
       - name: Generate summary
         run: |
