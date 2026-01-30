@@ -136,9 +136,12 @@ jobs:
         run: |
           echo "=== 构建产物 ==="
           ls -lh target/release/analyzer
-          ls -lh target/release/libmaster_control_analyzer.so
-          file target/release/analyzer
-          file target/release/libmaster_control_analyzer.so
+          echo "=== 所有 .so 文件 ==="
+          find target/release -name "*.so" -o -name "*.so.*" | head -30
+          echo "=== master_control 相关文件 ==="
+          find target/release -name "*master_control*" | head -20
+          echo "=== cdylib 相关 ==="
+          find target -name "*master_control_analyzer*" | head -20
 
       - name: Compress binaries with UPX
         run: |
