@@ -130,7 +130,15 @@ jobs:
         shell: bash
         run: |
           . "$HOME/.cargo/env"
-          cargo build --release --workspace
+          cargo build --release --workspace --exclude cpp-demo-analyzer
+
+      - name: Verify build artifacts
+        run: |
+          echo "=== 构建产物 ==="
+          ls -lh target/release/analyzer
+          ls -lh target/release/libmaster_control_analyzer.so
+          file target/release/analyzer
+          file target/release/libmaster_control_analyzer.so
 
       - name: Compress binaries with UPX
         run: |
@@ -237,7 +245,7 @@ jobs:
           echo "Full Version: $FULL_VERSION"
 
       - name: Build release
-        run: cargo build --release --workspace --target ${{ matrix.target }}
+        run: cargo build --release --workspace --exclude cpp-demo-analyzer --target ${{ matrix.target }}
 
       # UPX 压缩（仅 Windows）
       - name: Install UPX (Windows)
