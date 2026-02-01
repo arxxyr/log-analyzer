@@ -68,36 +68,29 @@ jobs:
       - name: Run tests
         run: cargo test --all --release
 
-  # ============ 构建（Linux musl - Alpine 容器原生编译）============
+  # ============ 构建（Linux：CLI musl 静态 + 插件 gnu 动态）============
   build-linux:
     name: Build (linux-x64-musl)
     runs-on: ubuntu-latest
     needs: [test]
-    container:
-      image: alpine:latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install build dependencies
-        run: |
-          apk add --no-cache \
-            curl gcc g++ musl-dev pkgconfig \
-            openssl-dev openssl-libs-static \
-            perl make bash upx
-
       - name: Install Rust nightly
-        run: |
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain nightly
-          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          targets: x86_64-unknown-linux-musl
+
+      - name: Install musl tools
+        run: sudo apt-get update && sudo apt-get install -y musl-tools upx-ucl
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
         with:
-          key: x86_64-unknown-linux-musl
+          key: linux-musl
 
       - name: Generate version info
         id: version
-        shell: bash
         run: |
           BASE_VERSION=$(grep -A5 '^\[workspace\.package\]' Cargo.toml | grep '^version' | sed 's/.*= *"\([^"]*\)".*/\1/')
           echo "base_version=$BASE_VERSION" >> $GITHUB_OUTPUT
@@ -126,41 +119,41 @@ jobs:
           echo "Build Type: $BUILD_TYPE"
           echo "Full Version: $FULL_VERSION"
 
-      - name: Build release
-        shell: bash
-        run: |
-          . "$HOME/.cargo/env"
-          cargo build --release -p analyzer-cli -p master-control-analyzer
+      # CLI 用 musl 静态链接（可独立部署，无 glibc 依赖）
+      - name: Build CLI (musl static)
+        run: cargo build --release -p analyzer-cli --target x86_64-unknown-linux-musl
+
+      # 插件用 gnu 动态链接（cdylib 不支持 musl target）
+      - name: Build plugins (gnu)
+        run: cargo build --release -p master-control-analyzer
 
       - name: Verify build artifacts
         run: |
-          echo "=== 构建产物 ==="
-          ls -lh target/release/analyzer
-          echo "=== 搜索所有 master_control 相关文件 ==="
-          find target -name "*master_control*" -not -path "*/build/*" -not -path "*/.fingerprint/*"
-          echo "=== target/release 中的库文件 ==="
-          ls -lh target/release/*.so target/release/*.a target/release/*.dylib 2>/dev/null || echo "无库文件"
-          echo "=== target/release/deps 中的插件 ==="
-          ls -lh target/release/deps/*master_control* 2>/dev/null || echo "deps中无插件"
+          echo "=== CLI (musl) ==="
+          ls -lh target/x86_64-unknown-linux-musl/release/analyzer
+          file target/x86_64-unknown-linux-musl/release/analyzer
+          echo "=== Plugin (gnu) ==="
+          ls -lh target/release/libmaster_control_analyzer.so
+          file target/release/libmaster_control_analyzer.so
 
       - name: Compress binaries with UPX
         run: |
           echo "=== 压缩前 ==="
-          ls -lh target/release/analyzer || true
-          ls -lh target/release/libmaster_control_analyzer.so || true
+          ls -lh target/x86_64-unknown-linux-musl/release/analyzer
+          ls -lh target/release/libmaster_control_analyzer.so
 
-          upx --best --lzma target/release/analyzer || true
+          upx --best --lzma target/x86_64-unknown-linux-musl/release/analyzer || true
           upx --best --lzma target/release/libmaster_control_analyzer.so || true
 
           echo "=== 压缩后 ==="
-          ls -lh target/release/analyzer || true
-          ls -lh target/release/libmaster_control_analyzer.so || true
+          ls -lh target/x86_64-unknown-linux-musl/release/analyzer
+          ls -lh target/release/libmaster_control_analyzer.so
 
       - name: Package artifacts
         run: |
           mkdir -p package/plugins package/configs package/fonts
 
-          cp target/release/analyzer package/
+          cp target/x86_64-unknown-linux-musl/release/analyzer package/
           cp target/release/libmaster_control_analyzer.so package/plugins/
           cp -r configs/* package/configs/ || true
           cp -r fonts/* package/fonts/ || true
