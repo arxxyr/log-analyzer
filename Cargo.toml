@@ -54,8 +54,6 @@ tokio-util = "0.7"
 # SSH 和远程连接
 ssh2 = "0.9"
 
-# OpenSSL vendored（musl 静态链接需要）
-openssl = { version = "0.10", features = ["vendored"] }
 
 # 进度显示
 indicatif = "0.18"
