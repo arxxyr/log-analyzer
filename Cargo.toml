@@ -7,13 +7,12 @@ members = [
     "crates/analyzer-workflow",
     "crates/analyzer-merger",
     "crates/analyzer-visualizer",
-    "crates/analyzer-tui",
     "crates/plugins/master-control-analyzer",
     "crates/plugins/cpp-demo-analyzer",
 ]
 
 [workspace.package]
-version = "0.3.3"
+version = "0.4.0"
 edition = "2024"
 authors = ["loosqk"]
 license = "Apache-2.0"
@@ -54,14 +53,9 @@ tokio-util = "0.7"
 # SSH 和远程连接
 ssh2 = "0.9"
 
+
 # 进度显示
 indicatif = "0.18"
-
-# TUI 相关
-ratatui = "0.30.0"
-crossterm = "0.29"
-crossbeam-channel = "0.5"
-parking_lot = "0.12"
 
 # 文件系统
 dirs = "6.0"
@@ -78,8 +72,11 @@ tokio-test = "0.4"
 mimalloc = "0.1"
 
 [profile.release]
-opt-level = 3
-lto = "thin"           # 使用 thin LTO（插件架构下 full LTO 不适用）
-codegen-units = 16     # 增加并行编译单元（插件模式下需要）
-strip = true
-panic = "abort"
+opt-level = 3          # 性能优先
+lto = "fat"            # 全量 LTO，最大化跨 crate 优化和体积压缩
+codegen-units = 1      # 单编译单元，配合 LTO 最大化优化效果
+strip = true           # 移除符号表和调试信息
+panic = "abort"        # 移除 unwind 表，减小体积
+
+[profile.release.build-override]
+opt-level = 3          # 构建脚本用速度优先（如 openssl vendored 编译）

@@ -18,7 +18,6 @@ analyzer-workflow = { path = "../analyzer-workflow" }
 analyzer-remote = { path = "../analyzer-remote" }
 analyzer-merger = { path = "../analyzer-merger" }
 analyzer-visualizer = { path = "../analyzer-visualizer" }
-analyzer-tui = { path = "../analyzer-tui", optional = true }
 
 # ABI 稳定性
 abi_stable = { workspace = true }
@@ -47,7 +46,3 @@ tokio = { workspace = true }
 
 # 内存分配器
 mimalloc = { workspace = true }
-
-[features]
-default = ["tui"]
-tui = ["analyzer-tui"]
