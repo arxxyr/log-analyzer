@@ -155,6 +155,20 @@ jobs:
           echo "=== Plugin ==="
           ls -lh "target/${{ matrix.target }}/release/${{ matrix.plugin_prefix }}master_control_analyzer.${{ matrix.plugin_ext }}"
 
+      # 验证插件 ELF 完整性（Linux）
+      - name: Verify plugin ELF integrity
+        if: runner.os == 'Linux'
+        run: |
+          PLUGIN="target/${{ matrix.target }}/release/${{ matrix.plugin_prefix }}master_control_analyzer.${{ matrix.plugin_ext }}"
+          echo "=== 检查动态段 ==="
+          readelf -d "$PLUGIN" | head -10
+          if readelf -d "$PLUGIN" 2>&1 | grep -q "NEEDED"; then
+            echo "✓ 插件 ELF 结构完整"
+          else
+            echo "✗ 插件 ELF 结构异常！"
+            exit 1
+          fi
+
       # UPX 压缩（Linux/Windows）
       - name: Install UPX (Linux)
         if: runner.os == 'Linux'
@@ -176,8 +190,10 @@ jobs:
           ls -lh "$EXE"
           ls -lh "$PLUGIN"
 
+          # 只压缩主程序，不压缩插件 .so/.dll
+          # UPX 对共享库的支持不完善，会破坏 ELF DYNAMIC 段的文件偏移，
+          # 导致 dlopen 后符号解析失败引发 SIGSEGV
           upx --best --lzma "$EXE" || true
-          upx --best --lzma "$PLUGIN" || true
 
           echo "=== 压缩后 ==="
           ls -lh "$EXE"

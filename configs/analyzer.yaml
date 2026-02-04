@@ -4,7 +4,7 @@
 # 远程连接配置
 remote:
   enabled: true
-  host: "172.31.22.235"
+  host: "192.168.5.101"
   port: 22
   user: "linux"
   # 认证方式（优先级从高到低）
