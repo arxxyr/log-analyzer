@@ -2,6 +2,8 @@
 //!
 //! 提供 SCP/SFTP 文件传输功能，支持进度回调
 
+use rust_i18n::t;
+
 use crate::ssh::{RemoteFileInfo, SshConnection, SshError};
 use indicatif::{ProgressBar, ProgressStyle};
 use std::fs::{self, File};
@@ -37,7 +39,7 @@ impl ProgressBarCallback {
                 .unwrap()
                 .progress_chars("#>-"),
         );
-        bar.set_message(format!("下载 {}", file_name));
+        bar.set_message(t!("transfer.downloading", file = file_name).to_string());
 
         Self { bar }
     }
@@ -49,12 +51,13 @@ impl TransferProgress for ProgressBarCallback {
     }
 
     fn on_complete(&mut self) {
-        self.bar.finish_with_message("下载完成");
+        self.bar
+            .finish_with_message(t!("transfer.complete").to_string());
     }
 
     fn on_error(&mut self, error: &str) {
         self.bar
-            .abandon_with_message(format!("下载失败: {}", error));
+            .abandon_with_message(t!("transfer.failed", error = error).to_string());
     }
 }
 

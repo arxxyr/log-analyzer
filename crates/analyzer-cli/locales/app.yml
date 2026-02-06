@@ -1,0 +1,385 @@
+_version: 2
+
+# CLI help 文本
+cli.about:
+  zh-CN: "通用日志分析器（支持插件扩展和远程获取）"
+  en: "Universal log analyzer (plugin extensions & remote fetching)"
+
+cli.config_help:
+  zh-CN: "配置文件路径"
+  en: "Configuration file path"
+
+cli.log_level_help:
+  zh-CN: "日志级别"
+  en: "Log level"
+
+cli.plugin_dir_help:
+  zh-CN: "插件目录（覆盖配置文件）"
+  en: "Plugin directory (overrides config)"
+
+cli.verbose_help:
+  zh-CN: "详细输出"
+  en: "Verbose output"
+
+cli.lang_help:
+  zh-CN: "语言设置 (zh-CN, en)"
+  en: "Language setting (zh-CN, en)"
+
+# 子命令
+cmd.auto.about:
+  zh-CN: "自动模式：获取最新日志并分析"
+  en: "Auto mode: fetch latest logs and analyze"
+
+cmd.auto.pattern_help:
+  zh-CN: "指定文件模式（覆盖配置文件）"
+  en: "File pattern (overrides config)"
+
+cmd.auto.output_help:
+  zh-CN: "输出目录（覆盖配置文件）"
+  en: "Output directory (overrides config)"
+
+cmd.analyze.about:
+  zh-CN: "分析本地或远程文件"
+  en: "Analyze local or remote files"
+
+cmd.analyze.input_help:
+  zh-CN: "输入文件（本地路径或远程文件名）"
+  en: "Input file (local path or remote filename)"
+
+cmd.analyze.output_help:
+  zh-CN: "输出目录"
+  en: "Output directory"
+
+cmd.analyze.plugin_help:
+  zh-CN: "手动指定插件"
+  en: "Manually specify plugin"
+
+cmd.analyze.remote_help:
+  zh-CN: "从远程获取"
+  en: "Fetch from remote"
+
+cmd.list_remote.about:
+  zh-CN: "列出远程可用的日志文件"
+  en: "List available remote log files"
+
+cmd.list_remote.pattern_help:
+  zh-CN: "文件模式"
+  en: "File pattern"
+
+cmd.list_plugins.about:
+  zh-CN: "列出所有可用的分析器插件"
+  en: "List all available analyzer plugins"
+
+cmd.download.about:
+  zh-CN: "下载文件（不分析）"
+  en: "Download file (no analysis)"
+
+cmd.download.file_help:
+  zh-CN: "远程文件名"
+  en: "Remote filename"
+
+cmd.download.output_help:
+  zh-CN: "本地保存路径"
+  en: "Local save path"
+
+cmd.check_config.about:
+  zh-CN: "验证配置文件"
+  en: "Validate configuration file"
+
+cmd.multi.about:
+  zh-CN: "多文件分析：合并多个日志源并生成统一甘特图"
+  en: "Multi-file analysis: merge multiple log sources and generate unified Gantt chart"
+
+cmd.multi.output_help:
+  zh-CN: "输出目录（覆盖配置文件）"
+  en: "Output directory (overrides config)"
+
+cmd.multi.prefix_help:
+  zh-CN: "输出文件名前缀"
+  en: "Output filename prefix"
+
+cmd.multi.auto_download_help:
+  zh-CN: "是否自动从远程下载"
+  en: "Auto download from remote"
+
+# 状态消息
+msg.plugin_dir_not_exist:
+  zh-CN: "插件目录不存在: %{path}"
+  en: "Plugin directory not found: %{path}"
+
+msg.scan_plugin_dir:
+  zh-CN: "扫描插件目录: %{path}"
+  en: "Scanning plugin directory: %{path}"
+
+msg.load_plugin_success:
+  zh-CN: "  ✓ 加载插件: %{name}"
+  en: "  ✓ Loaded plugin: %{name}"
+
+msg.load_plugin_failed:
+  zh-CN: "  ✗ 加载失败: %{path} - %{error}"
+  en: "  ✗ Load failed: %{path} - %{error}"
+
+msg.no_plugins_found:
+  zh-CN: "未找到任何可用插件"
+  en: "No available plugins found"
+
+msg.plugins_loaded:
+  zh-CN: "成功加载 %{count} 个插件"
+  en: "Successfully loaded %{count} plugins"
+
+msg.load_config:
+  zh-CN: "加载配置文件: %{path}"
+  en: "Loading config: %{path}"
+
+msg.config_not_exist:
+  zh-CN: "配置文件不存在，使用默认配置"
+  en: "Config file not found, using defaults"
+
+msg.using_plugin:
+  zh-CN: "使用插件: %{name} v%{version}"
+  en: "Using plugin: %{name} v%{version}"
+
+msg.analyzing_file:
+  zh-CN: "分析文件: %{path}"
+  en: "Analyzing file: %{path}"
+
+msg.output_dir:
+  zh-CN: "输出目录: %{path}"
+  en: "Output directory: %{path}"
+
+msg.analysis_complete:
+  zh-CN: "分析完成！"
+  en: "Analysis complete!"
+
+msg.generated_files:
+  zh-CN: "生成的文件:"
+  en: "Generated files:"
+
+msg.plugin_list_title:
+  zh-CN: "可用插件列表:"
+  en: "Available plugins:"
+
+msg.plugin_name:
+  zh-CN: "名称: %{name}"
+  en: "Name: %{name}"
+
+msg.plugin_version:
+  zh-CN: "版本: %{version}"
+  en: "Version: %{version}"
+
+msg.plugin_author:
+  zh-CN: "作者: %{author}"
+  en: "Author: %{author}"
+
+msg.plugin_description:
+  zh-CN: "描述: %{description}"
+  en: "Description: %{description}"
+
+msg.plugin_extensions:
+  zh-CN: "支持的文件类型: "
+  en: "Supported file types: "
+
+msg.plugin_path:
+  zh-CN: "路径: %{path}"
+  en: "Path: %{path}"
+
+msg.config_valid:
+  zh-CN: "✓ 配置文件验证成功"
+  en: "✓ Configuration validated"
+
+msg.config_summary:
+  zh-CN: "配置摘要:"
+  en: "Configuration summary:"
+
+msg.remote_enabled:
+  zh-CN: "  远程连接: 启用"
+  en: "  Remote connection: enabled"
+
+msg.remote_disabled:
+  zh-CN: "  远程连接: 禁用"
+  en: "  Remote connection: disabled"
+
+msg.remote_host:
+  zh-CN: "  远程主机: %{user}@%{host}:%{port}"
+  en: "  Remote host: %{user}@%{host}:%{port}"
+
+msg.local_log_dir:
+  zh-CN: "  本地日志目录: %{path}"
+  en: "  Local log directory: %{path}"
+
+msg.output_directory:
+  zh-CN: "  输出目录: %{path}"
+  en: "  Output directory: %{path}"
+
+msg.plugin_directory:
+  zh-CN: "  插件目录: %{path}"
+  en: "  Plugin directory: %{path}"
+
+msg.analyzer_count:
+  zh-CN: "  分析器数量: %{count}"
+  en: "  Analyzer count: %{count}"
+
+msg.remote_files_title:
+  zh-CN: "远程可用文件:"
+  en: "Available remote files:"
+
+msg.file_downloaded:
+  zh-CN: "文件已下载到: %{path}"
+  en: "File downloaded to: %{path}"
+
+msg.cleanup_old_output:
+  zh-CN: "清理旧输出文件"
+  en: "Cleaning up old output files"
+
+msg.workflow_failed:
+  zh-CN: "工作流执行失败"
+  en: "Workflow execution failed"
+
+msg.multi_file_mode:
+  zh-CN: "多文件模式: %{count} 个分析任务"
+  en: "Multi-file mode: %{count} analysis tasks"
+
+msg.multi_file_analysis_disabled:
+  zh-CN: "多文件分析未启用，请在配置文件中设置 multi_file.enabled = true"
+  en: "Multi-file analysis not enabled, set multi_file.enabled = true in config"
+
+msg.multi_file_start:
+  zh-CN: "开始多文件分析"
+  en: "Starting multi-file analysis"
+
+msg.finding_remote_file:
+  zh-CN: "查找远程文件: %{pattern}"
+  en: "Finding remote file: %{pattern}"
+
+msg.downloading:
+  zh-CN: "下载: %{name}"
+  en: "Downloading: %{name}"
+
+msg.no_matching_file:
+  zh-CN: "未找到匹配文件: %{pattern}"
+  en: "No matching file found: %{pattern}"
+
+msg.found_local_file:
+  zh-CN: "找到本地文件: %{path}"
+  en: "Found local file: %{path}"
+
+msg.no_files_to_analyze:
+  zh-CN: "未找到任何要分析的文件"
+  en: "No files to analyze"
+
+msg.files_to_analyze:
+  zh-CN: "共找到 %{count} 个文件需要分析"
+  en: "Found %{count} files to analyze"
+
+msg.analyzing_with_primary:
+  zh-CN: "分析文件: %{path} (主时间轴: %{is_primary})"
+  en: "Analyzing file: %{path} (primary: %{is_primary})"
+
+msg.extracted_rounds:
+  zh-CN: "提取到 %{count} 个轮次时间范围"
+  en: "Extracted %{count} round time ranges"
+
+msg.analysis_done:
+  zh-CN: "  ✓ 分析完成: %{summary}"
+  en: "  ✓ Analysis complete: %{summary}"
+
+msg.merging_timelines:
+  zh-CN: "合并时间线..."
+  en: "Merging timelines..."
+
+msg.merge_complete:
+  zh-CN: "合并完成: %{count} 个事件"
+  en: "Merge complete: %{count} events"
+
+msg.generating_gantt:
+  zh-CN: "生成甘特图: %{path}"
+  en: "Generating Gantt chart: %{path}"
+
+msg.multi_analysis_complete:
+  zh-CN: "✓ 多文件分析完成！"
+  en: "✓ Multi-file analysis complete!"
+
+msg.analyzed_file_count:
+  zh-CN: "  - 分析文件数: %{count}"
+  en: "  - Analyzed files: %{count}"
+
+msg.merged_event_count:
+  zh-CN: "  - 合并事件数: %{count}"
+  en: "  - Merged events: %{count}"
+
+msg.gantt_chart_path:
+  zh-CN: "  - 甘特图: %{path}"
+  en: "  - Gantt chart: %{path}"
+
+msg.unified_gantt_path:
+  zh-CN: "  - 统一甘特图: %{path}"
+  en: "  - Unified Gantt chart: %{path}"
+
+msg.no_command_auto:
+  zh-CN: "未指定命令，执行 auto 模式"
+  en: "No command specified, running auto mode"
+
+msg.only_one_result:
+  zh-CN: "只有一个分析结果，无需合并"
+  en: "Only one analysis result, no merge needed"
+
+msg.merging_timelines_count:
+  zh-CN: "合并 %{count} 个时间线..."
+  en: "Merging %{count} timelines..."
+
+msg.generating_unified_gantt:
+  zh-CN: "生成统一甘特图: %{path}"
+  en: "Generating unified Gantt chart: %{path}"
+
+# 错误消息
+err.invalid_path:
+  zh-CN: "无效的路径"
+  en: "Invalid path"
+
+err.plugin_analysis_failed:
+  zh-CN: "插件分析失败"
+  en: "Plugin analysis failed"
+
+err.file_not_exist:
+  zh-CN: "文件不存在: %{path}"
+  en: "File not found: %{path}"
+
+err.plugin_not_found:
+  zh-CN: "未找到插件: %{name}"
+  en: "Plugin not found: %{name}"
+
+err.cannot_auto_select_plugin:
+  zh-CN: "无法自动选择插件，请使用 --plugin 手动指定"
+  en: "Cannot auto-select plugin, use --plugin to specify manually"
+
+err.no_file_to_analyze:
+  zh-CN: "未找到要分析的文件"
+  en: "No file to analyze"
+
+err.no_plugin_selected:
+  zh-CN: "未选择插件"
+  en: "No plugin selected"
+
+err.workflow_failed:
+  zh-CN: "工作流失败"
+  en: "Workflow failed"
+
+err.load_plugin_lib:
+  zh-CN: "无法加载插件库 %{path}: %{error}"
+  en: "Cannot load plugin library %{path}: %{error}"
+
+err.init_plugin_module:
+  zh-CN: "初始化插件模块失败 %{path}: %{error}"
+  en: "Failed to initialize plugin module %{path}: %{error}"
+
+err.no_analyzer_config:
+  zh-CN: "未找到对应的分析器配置"
+  en: "Analyzer configuration not found"
+
+err.analyze_file_failed:
+  zh-CN: "分析文件失败: %{path}"
+  en: "Failed to analyze file: %{path}"
+
+err.no_events_to_visualize:
+  zh-CN: "没有事件可以可视化"
+  en: "No events to visualize"

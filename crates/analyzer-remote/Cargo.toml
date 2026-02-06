@@ -23,6 +23,9 @@ serde = { workspace = true }
 # 工具
 indicatif = { workspace = true }
 
+# 国际化
+rust-i18n = { workspace = true }
+
 [dev-dependencies]
 tokio = { workspace = true }
 tempfile = { workspace = true }
