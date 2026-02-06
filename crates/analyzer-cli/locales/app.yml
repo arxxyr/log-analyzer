@@ -315,6 +315,18 @@ msg.unified_gantt_path:
   zh-CN: "  - 统一甘特图: %{path}"
   en: "  - Unified Gantt chart: %{path}"
 
+msg.batch_analysis_start:
+  zh-CN: "批量分析模式：将分析 %{count} 个文件"
+  en: "Batch analysis mode: analyzing %{count} files"
+
+msg.batch_file_output:
+  zh-CN: "文件 %{name} 输出目录: %{dir}"
+  en: "File %{name} output directory: %{dir}"
+
+msg.batch_analysis_complete:
+  zh-CN: "批量分析完成，共分析 %{count} 个文件"
+  en: "Batch analysis complete, %{count} files analyzed"
+
 msg.no_command_auto:
   zh-CN: "未指定命令，执行 auto 模式"
   en: "No command specified, running auto mode"

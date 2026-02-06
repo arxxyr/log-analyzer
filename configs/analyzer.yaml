@@ -54,6 +54,8 @@ analyzers:
     is_primary: true  # 标记为主时间轴
     # master_control 日志在日期子目录中（如 /home/linux/.ros/log/20251226/）
     use_latest_date_dir: true
+    # 最多拉取和分析的文件数量（默认 1，CLI -n 参数可覆盖）
+    max_files: 5
     # 插件特定配置（可选）
     config:
       detect_rounds: true

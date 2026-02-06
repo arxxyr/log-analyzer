@@ -182,6 +182,7 @@ impl GanttChartGenerator {
         let track_labels_for_formatter = track_labels.clone();
         chart
             .configure_mesh()
+            .label_style(font_loader.font_desc(14))
             .x_labels(self.config.time_label_count)
             .y_labels(track_count)
             .y_label_formatter(&move |y| {

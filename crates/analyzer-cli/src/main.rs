@@ -117,6 +117,10 @@ struct Cli {
     /// 语言设置 (zh-CN, en)
     #[arg(long, global = true)]
     lang: Option<String>,
+
+    /// 每个模式最多分析的文件数量（覆盖配置文件中的 max_files）
+    #[arg(short = 'n', long, global = true)]
+    max_files: Option<usize>,
 }
 
 #[derive(Subcommand, Debug)]
@@ -526,6 +530,15 @@ fn extract_round_time_ranges(timeline: &timeline::Timeline) -> Vec<RoundTimeRang
     ranges
 }
 
+/// 检测是否存在同 pattern 的多个 task（批量模式）
+fn has_batch_tasks(tasks: &[AnalysisTask]) -> bool {
+    let mut pattern_counts = std::collections::HashMap::new();
+    for task in tasks {
+        *pattern_counts.entry(&task.pattern).or_insert(0usize) += 1;
+    }
+    pattern_counts.values().any(|&count| count > 1)
+}
+
 /// 运行多文件分析（责任链模式）
 fn run_multi_file_analysis(
     tasks: &[AnalysisTask],
@@ -534,6 +547,11 @@ fn run_multi_file_analysis(
 ) -> Result<Vec<AnalyzeResult>> {
     let mut results = Vec::new();
     let mut context: Option<AnalyzerContext> = None;
+    let is_batch = has_batch_tasks(tasks);
+
+    if is_batch {
+        println!("\n{}", t!("msg.batch_analysis_start", count = tasks.len()));
+    }
 
     // 按主时间轴优先排序：先分析 is_primary=true 的任务
     let mut sorted_tasks: Vec<_> = tasks.to_vec();
@@ -553,16 +571,32 @@ fn run_multi_file_analysis(
             .find_by_name(&task.plugin_name)
             .with_context(|| t!("err.plugin_not_found", name = &task.plugin_name).to_string())?;
 
+        // 批量模式下，为每个文件创建独立的输出子目录
+        let output_dir = if is_batch {
+            let file_stem = Path::new(&task.file_name)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or(&task.file_name);
+            let sub_dir = config.local.output_dir.join(file_stem);
+            fs::create_dir_all(&sub_dir)?;
+            println!(
+                "{}",
+                t!(
+                    "msg.batch_file_output",
+                    name = &task.file_name,
+                    dir = sub_dir.display().to_string()
+                )
+            );
+            sub_dir
+        } else {
+            config.local.output_dir.clone()
+        };
+
         // 执行分析（主时间轴不需要上下文，后续分析器需要）
         let result = if task.is_primary {
-            run_analysis(plugin, &task.local_file, &config.local.output_dir)?
+            run_analysis(plugin, &task.local_file, &output_dir)?
         } else {
-            run_analysis_with_context(
-                plugin,
-                &task.local_file,
-                &config.local.output_dir,
-                context.as_ref(),
-            )?
+            run_analysis_with_context(plugin, &task.local_file, &output_dir, context.as_ref())?
         };
 
         // 如果是主时间轴，提取轮次时间范围作为上下文
@@ -575,6 +609,13 @@ fn run_multi_file_analysis(
         }
 
         results.push(result);
+    }
+
+    if is_batch {
+        println!(
+            "\n{}",
+            t!("msg.batch_analysis_complete", count = results.len())
+        );
     }
 
     Ok(results)
@@ -703,6 +744,18 @@ fn main() -> Result<()> {
         warn!("{}", t!("msg.config_not_exist"));
         AnalyzerConfig::default()
     };
+
+    // 如果指定了 -n 参数，覆盖所有分析器的 max_files 配置
+    let mut config = config;
+    if let Some(n) = cli.max_files {
+        for analyzer in &mut config.analyzers {
+            analyzer.max_files = n;
+        }
+        // max_files > 1 时自动启用 multi_file 模式
+        if n > 1 {
+            config.multi_file.enabled = true;
+        }
+    }
 
     // 确定插件目录
     let plugin_dir = if let Some(dir) = cli.plugin_dir {
@@ -833,6 +886,9 @@ fn main() -> Result<()> {
                         if matches!(ext, Some("png") | Some("csv")) {
                             let _ = fs::remove_file(path);
                         }
+                    } else if path.is_dir() {
+                        // 清理批量模式创建的子目录
+                        let _ = fs::remove_dir_all(&path);
                     }
                 }
             }
@@ -1191,6 +1247,9 @@ fn main() -> Result<()> {
                         if matches!(ext, Some("png") | Some("csv")) {
                             let _ = fs::remove_file(path);
                         }
+                    } else if path.is_dir() {
+                        // 清理批量模式创建的子目录
+                        let _ = fs::remove_dir_all(&path);
                     }
                 }
             }

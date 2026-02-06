@@ -330,9 +330,17 @@ pub struct AnalyzerMapping {
     #[serde(default)]
     pub use_latest_date_dir: bool,
 
+    /// 每个模式最多拉取和分析的文件数量（默认 1，表示只分析最新的 1 个）
+    #[serde(default = "default_max_files")]
+    pub max_files: usize,
+
     /// 插件特定配置
     #[serde(default)]
     pub config: Option<serde_json::Value>,
+}
+
+fn default_max_files() -> usize {
+    1
 }
 
 fn default_enabled() -> bool {
@@ -608,6 +616,7 @@ impl Default for AnalyzerConfig {
                 priority: 0,
                 remote_log_dir: None,
                 use_latest_date_dir: false,
+                max_files: 1,
                 config: None,
             }],
             multi_file: MultiFileConfig::default(),
