@@ -27,12 +27,220 @@
 //! - behavior_tree: BehaviorTree 节点（包含多个子动作）
 
 use std::collections::HashMap;
+use std::sync::LazyLock;
 
 use anyhow::Result;
 use regex::Regex;
+use rust_i18n::t;
 
 use crate::models::{ActionOperation, LogLine, NavigationFlow, PauseEvent, Round, SubStep};
 use crate::round_detector::ts_to_round_id;
+
+// ============================================================
+// 新格式正则（ROS2ActionAdapter）
+// ============================================================
+
+/// ROS2ActionAdapter[type] - 开始执行
+static ADAPTER_START_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"ROS2ActionAdapter\[(\w+)\]\s*-\s*开始执行")
+        .expect("invalid regex: ADAPTER_START_REGEX")
+});
+/// ROS2ActionAdapter[type] - 等待服务器 'xxx'...
+static ADAPTER_WAIT_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"ROS2ActionAdapter\[(\w+)\]\s*-\s*等待服务器\s*'([^']+)'")
+        .expect("invalid regex: ADAPTER_WAIT_REGEX")
+});
+/// ROS2ActionAdapter[type] - 服务器已就绪
+static ADAPTER_READY_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"ROS2ActionAdapter\[(\w+)\]\s*-\s*服务器已就绪")
+        .expect("invalid regex: ADAPTER_READY_REGEX")
+});
+/// ROS2ActionAdapter[type] - 发送目标
+static ADAPTER_SEND_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"ROS2ActionAdapter\[(\w+)\]\s*-\s*发送目标")
+        .expect("invalid regex: ADAPTER_SEND_REGEX")
+});
+/// ROS2ActionAdapter[type] - 执行完成，结果: (成功|失败)
+static ADAPTER_END_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"ROS2ActionAdapter\[(\w+)\]\s*-\s*执行完成，结果:\s*(\S+)")
+        .expect("invalid regex: ADAPTER_END_REGEX")
+});
+/// ROS2ActionAdapter[xxx] - [RESPONSE] 目标已被接受
+static ADAPTER_RESPONSE_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"ROS2ActionAdapter\[(\w+)\]\s*-\s*\[RESPONSE\]\s*目标已被接受")
+        .expect("invalid regex: ADAPTER_RESPONSE_REGEX")
+});
+/// ROS2ActionAdapter[xxx] - [RESULT] 完成，成功: 是, 消息: xxx
+static ADAPTER_RESULT_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"ROS2ActionAdapter\[(\w+)\]\s*-\s*\[RESULT\]\s*完成，成功:\s*(\S+)")
+        .expect("invalid regex: ADAPTER_RESULT_REGEX")
+});
+/// ROS2ActionAdapter[xxx] - 暂停（动作被暂停）
+static ADAPTER_PAUSE_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"ROS2ActionAdapter\[(\w+)\]\s*-\s*暂停")
+        .expect("invalid regex: ADAPTER_PAUSE_REGEX")
+});
+/// ROS2ActionAdapter[xxx] - 恢复（动作恢复执行）
+static ADAPTER_RESUME_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"ROS2ActionAdapter\[(\w+)\]\s*-\s*恢复")
+        .expect("invalid regex: ADAPTER_RESUME_REGEX")
+});
+
+// 预打舵相关正则（PrePlanNavigationNode 格式）
+
+/// PrePlanNavigationNode[xxx] - 开始执行
+static PREPLAN_START_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"PrePlanNavigationNode\[([^\]]+)\]\s*-\s*开始执行")
+        .expect("invalid regex: PREPLAN_START_REGEX")
+});
+/// PrePlanNavigationNode[xxx] - 设置预规划目标:
+static PREPLAN_POS_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"PrePlanNavigationNode\[([^\]]+)\]\s*-\s*设置预规划目标:")
+        .expect("invalid regex: PREPLAN_POS_REGEX")
+});
+/// 位置: (x, y, z)
+static PREPLAN_POSITION_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"位置:\s*\(([^)]+)\)").expect("invalid regex: PREPLAN_POSITION_REGEX")
+});
+/// action=N
+static PREPLAN_ACTION_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"action=(\d+)").expect("invalid regex: PREPLAN_ACTION_REGEX"));
+/// PrePlanNavigationNode[xxx] - 服务响应: error_code=N
+static PREPLAN_RESPONSE_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"PrePlanNavigationNode\[([^\]]+)\]\s*-\s*服务响应:\s*error_code=(\d+)")
+        .expect("invalid regex: PREPLAN_RESPONSE_REGEX")
+});
+/// PrePlanNavigationNode[xxx] - 执行成功
+static PREPLAN_END_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"PrePlanNavigationNode\[([^\]]+)\]\s*-\s*执行成功")
+        .expect("invalid regex: PREPLAN_END_REGEX")
+});
+
+/// action_type_code 提取
+static ACTION_CODE_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"action_type_code=(\d+)").expect("invalid regex: ACTION_CODE_REGEX")
+});
+
+// ============================================================
+// BehaviorTree 节点格式正则（最新格式）
+// ============================================================
+
+/// BehaviorTreeNode xxx: 映射 X 个输入参数到黑板
+static BT_PARAM_MAP_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"BehaviorTreeNode\s+(\w+):\s*映射\s*\d+\s*个输入参数到黑板")
+        .expect("invalid regex: BT_PARAM_MAP_REGEX")
+});
+/// @gas_test_action_code = "2015" 提取 action_code
+static BT_ACTION_CODE_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"@(\w+_action_code)\s*=\s*"(\d+)""#).expect("invalid regex: BT_ACTION_CODE_REGEX")
+});
+/// ========== BehaviorTree 节点开始 ==========
+static BT_START_MARKER_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"=+\s*BehaviorTree\s*节点开始\s*=+").expect("invalid regex: BT_START_MARKER_REGEX")
+});
+/// 节点ID: normal_arm_leak_swap
+static BT_NODE_ID_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"节点ID:\s*(\S+)").expect("invalid regex: BT_NODE_ID_REGEX"));
+/// ========== BehaviorTree 节点结束 ==========
+static BT_END_MARKER_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"=+\s*BehaviorTree\s*节点结束\s*=+").expect("invalid regex: BT_END_MARKER_REGEX")
+});
+/// 结果: SUCCESS / FAILURE
+static BT_RESULT_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"结果:\s*(\w+)").expect("invalid regex: BT_RESULT_REGEX"));
+
+// BehaviorTree 中间动作模块正则
+
+/// [ModuleName] node=ModuleName phase=start ...
+static BT_MODULE_START_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\[(\w+)\]\s+node=\w+\s+phase=start").expect("invalid regex: BT_MODULE_START_REGEX")
+});
+/// [ModuleName] node=ModuleName phase=end status=success cost_ms=XXX
+static BT_MODULE_END_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\[(\w+)\]\s+node=\w+\s+phase=end\s+status=(\w+)\s+cost_ms=(\d+)")
+        .expect("invalid regex: BT_MODULE_END_REGEX")
+});
+/// [ExecuteDoubleArmMoveAction] result received code=0 message=...
+static BT_ARM_RESULT_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\[ExecuteDoubleArmMoveAction\]\s+result\s+received\s+code=(\d+)")
+        .expect("invalid regex: BT_ARM_RESULT_REGEX")
+});
+
+// ============================================================
+// 细化阶段检测正则（BehaviorTreeNode 内部子阶段）
+// ============================================================
+
+/// GetReadyPoseAction phase=start
+static GET_READY_POSE_START_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"node=GetReadyPoseAction\s+phase=start")
+        .expect("invalid regex: GET_READY_POSE_START_REGEX")
+});
+/// GetReadyPoseAction phase=end
+static GET_READY_POSE_END_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"node=GetReadyPoseAction\s+phase=end\s+status=(\w+)\s+cost_ms=(\d+)")
+        .expect("invalid regex: GET_READY_POSE_END_REGEX")
+});
+/// DetObjPose start
+static DET_OBJ_POSE_START_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"DetObjPose start camera_id=(\w+).*obj_id=(\d+)")
+        .expect("invalid regex: DET_OBJ_POSE_START_REGEX")
+});
+/// DetObjPose response
+static DET_OBJ_POSE_RESPONSE_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"DetObjPose response ret=(\d+)")
+        .expect("invalid regex: DET_OBJ_POSE_RESPONSE_REGEX")
+});
+/// DetObjPose done
+static DET_OBJ_POSE_DONE_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"DetObjPose done goal_pose=").expect("invalid regex: DET_OBJ_POSE_DONE_REGEX")
+});
+/// gripper done
+static GRIPPER_DONE_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"gripper done status=(\w+) cost_ms=(\d+)")
+        .expect("invalid regex: GRIPPER_DONE_REGEX")
+});
+
+// ============================================================
+// 手臂动作子阶段正则（BehaviorTreeNode 内部）
+// ============================================================
+
+/// gripper start arm=xxx open=xxx
+static GRIPPER_START_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"gripper start arm=(\w+) open=(\w+)").expect("invalid regex: GRIPPER_START_REGEX")
+});
+/// gripper request: cmd_code=xxx arm=xxx
+static GRIPPER_REQUEST_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"gripper request: cmd_code=(\d+) arm=(\w+)")
+        .expect("invalid regex: GRIPPER_REQUEST_REGEX")
+});
+/// ArmObstacle start cmd=xxx
+static ARM_OBSTACLE_START_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"ArmObstacle start cmd=(\d+)").expect("invalid regex: ARM_OBSTACLE_START_REGEX")
+});
+/// ArmObstacle done resp_status=xxx
+static ARM_OBSTACLE_DONE_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"ArmObstacle done resp_status=(\d+)")
+        .expect("invalid regex: ARM_OBSTACLE_DONE_REGEX")
+});
+/// arm_transition_point: 只匹配 "- start cmd=" 不匹配 "custom start cmd="
+static ARM_TRANSITION_START_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"- start cmd=(\d+).*service=arm_transition_point")
+        .expect("invalid regex: ARM_TRANSITION_START_REGEX")
+});
+/// arm_transition_point 完成: 匹配任意 "custom done" 格式
+static ARM_TRANSITION_DONE_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"custom done (?:resp_status=(\d+)|reference_state_n=)")
+        .expect("invalid regex: ARM_TRANSITION_DONE_REGEX")
+});
+/// arm_move start cmd=xxx
+static ARM_MOVE_START_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"arm_move start cmd=(\d+)").expect("invalid regex: ARM_MOVE_START_REGEX")
+});
+/// arm_move response: success cmd=xxx / result code=xxx
+static ARM_MOVE_RESPONSE_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"arm_move response: (?:success cmd=(\d+)|result code=(\d+))")
+        .expect("invalid regex: ARM_MOVE_RESPONSE_REGEX")
+});
 
 /// 为指定类型的未完成 adapter 动作添加子步骤
 fn add_substep_to_adapter(
@@ -44,7 +252,12 @@ fn add_substep_to_adapter(
     if let Some((_, action)) = adapters
         .iter_mut()
         .filter(|(k, a)| k.starts_with(adapter_type) && a.end_ts.is_none())
-        .max_by(|(_, a1), (_, a2)| a1.start_ts.partial_cmp(&a2.start_ts).unwrap())
+        .max_by(|(_, a1), (_, a2)| match (a1.start_ts, a2.start_ts) {
+            (Some(t1), Some(t2)) => t1.total_cmp(&t2),
+            (Some(_), None) => std::cmp::Ordering::Greater,
+            (None, Some(_)) => std::cmp::Ordering::Less,
+            (None, None) => std::cmp::Ordering::Equal,
+        })
     {
         action.sub_steps.push(SubStep {
             name: step_name,
@@ -135,120 +348,52 @@ fn new_action(
 /// # 返回
 /// 包含所有检测到的导航流程的向量
 pub fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<NavigationFlow>> {
-    // ============================================================
-    // 新格式正则（ROS2ActionAdapter）
-    // ============================================================
-    // ROS2ActionAdapter[type] - 开始执行
-    let adapter_start_regex = Regex::new(r"ROS2ActionAdapter\[(\w+)\]\s*-\s*开始执行")?;
-    // ROS2ActionAdapter[type] - 等待服务器 'xxx'...
-    let adapter_wait_regex =
-        Regex::new(r"ROS2ActionAdapter\[(\w+)\]\s*-\s*等待服务器\s*'([^']+)'")?;
-    // ROS2ActionAdapter[type] - 服务器已就绪
-    let adapter_ready_regex = Regex::new(r"ROS2ActionAdapter\[(\w+)\]\s*-\s*服务器已就绪")?;
-    // ROS2ActionAdapter[type] - 发送目标
-    let adapter_send_regex = Regex::new(r"ROS2ActionAdapter\[(\w+)\]\s*-\s*发送目标")?;
-    // ROS2ActionAdapter[type] - 执行完成，结果: (成功|失败)
-    let adapter_end_regex =
-        Regex::new(r"ROS2ActionAdapter\[(\w+)\]\s*-\s*执行完成，结果:\s*(\S+)")?;
-    // ROS2ActionAdapter[xxx] - [RESPONSE] 目标已被接受
-    let adapter_response_regex =
-        Regex::new(r"ROS2ActionAdapter\[(\w+)\]\s*-\s*\[RESPONSE\]\s*目标已被接受")?;
-    // ROS2ActionAdapter[xxx] - [RESULT] 完成，成功: 是, 消息: xxx
-    let adapter_result_regex =
-        Regex::new(r"ROS2ActionAdapter\[(\w+)\]\s*-\s*\[RESULT\]\s*完成，成功:\s*(\S+)")?;
-    // ROS2ActionAdapter[xxx] - 暂停（动作被暂停）
-    let adapter_pause_regex = Regex::new(r"ROS2ActionAdapter\[(\w+)\]\s*-\s*暂停")?;
-    // ROS2ActionAdapter[xxx] - 恢复（动作恢复执行）
-    let adapter_resume_regex = Regex::new(r"ROS2ActionAdapter\[(\w+)\]\s*-\s*恢复")?;
+    // 引用静态预编译正则
+    let adapter_start_regex = &*ADAPTER_START_REGEX;
+    let adapter_wait_regex = &*ADAPTER_WAIT_REGEX;
+    let adapter_ready_regex = &*ADAPTER_READY_REGEX;
+    let adapter_send_regex = &*ADAPTER_SEND_REGEX;
+    let adapter_end_regex = &*ADAPTER_END_REGEX;
+    let adapter_response_regex = &*ADAPTER_RESPONSE_REGEX;
+    let adapter_result_regex = &*ADAPTER_RESULT_REGEX;
+    let adapter_pause_regex = &*ADAPTER_PAUSE_REGEX;
+    let adapter_resume_regex = &*ADAPTER_RESUME_REGEX;
 
-    // 预打舵相关正则（PrePlanNavigationNode 格式）
-    // PrePlanNavigationNode[xxx] - 开始执行
-    let preplan_start_regex = Regex::new(r"PrePlanNavigationNode\[([^\]]+)\]\s*-\s*开始执行")?;
-    // PrePlanNavigationNode[xxx] - 设置预规划目标:
-    //   位置: (x, y, z)
-    //   action=N, first_dir=M, rotate_mode=K
-    let preplan_pos_regex = Regex::new(r"PrePlanNavigationNode\[([^\]]+)\]\s*-\s*设置预规划目标:")?;
-    let preplan_position_regex = Regex::new(r"位置:\s*\(([^)]+)\)")?;
-    let preplan_action_regex = Regex::new(r"action=(\d+)")?;
-    // PrePlanNavigationNode[xxx] - 服务响应: error_code=N
-    let preplan_response_regex =
-        Regex::new(r"PrePlanNavigationNode\[([^\]]+)\]\s*-\s*服务响应:\s*error_code=(\d+)")?;
-    // PrePlanNavigationNode[xxx] - 执行成功
-    let preplan_end_regex = Regex::new(r"PrePlanNavigationNode\[([^\]]+)\]\s*-\s*执行成功")?;
+    let preplan_start_regex = &*PREPLAN_START_REGEX;
+    let preplan_pos_regex = &*PREPLAN_POS_REGEX;
+    let preplan_position_regex = &*PREPLAN_POSITION_REGEX;
+    let preplan_action_regex = &*PREPLAN_ACTION_REGEX;
+    let preplan_response_regex = &*PREPLAN_RESPONSE_REGEX;
+    let preplan_end_regex = &*PREPLAN_END_REGEX;
 
-    // 新格式: action_type_code 提取
-    let action_code_regex = Regex::new(r"action_type_code=(\d+)")?;
+    let action_code_regex = &*ACTION_CODE_REGEX;
 
-    // ============================================================
-    // BehaviorTree 节点格式正则（最新格式）
-    // ============================================================
-    // BehaviorTreeNode xxx: 映射 X 个输入参数到黑板
-    let bt_param_map_regex =
-        Regex::new(r"BehaviorTreeNode\s+(\w+):\s*映射\s*\d+\s*个输入参数到黑板")?;
-    // @gas_test_action_code = "2015" 提取 action_code
-    let bt_action_code_regex = Regex::new(r#"@(\w+_action_code)\s*=\s*"(\d+)""#)?;
-    // ========== BehaviorTree 节点开始 ==========
-    let bt_start_marker_regex = Regex::new(r"=+\s*BehaviorTree\s*节点开始\s*=+")?;
-    // 节点ID: normal_arm_leak_swap
-    let bt_node_id_regex = Regex::new(r"节点ID:\s*(\S+)")?;
-    // gas_test: gas_test start（预留，暂未使用）
-    // 注：Rust regex 不支持反向引用，使用简化模式
-    let _bt_test_start_regex = Regex::new(r"\w+:\s*\w+\s+start")?;
-    // gas_test: gas_test finished（预留，暂未使用）
-    let _bt_test_end_regex = Regex::new(r"\w+:\s*\w+\s+finished")?;
-    // ========== BehaviorTree 节点结束 ==========
-    let bt_end_marker_regex = Regex::new(r"=+\s*BehaviorTree\s*节点结束\s*=+")?;
-    // 结果: SUCCESS / FAILURE
-    let bt_result_regex = Regex::new(r"结果:\s*(\w+)")?;
+    let bt_param_map_regex = &*BT_PARAM_MAP_REGEX;
+    let bt_action_code_regex = &*BT_ACTION_CODE_REGEX;
+    let bt_start_marker_regex = &*BT_START_MARKER_REGEX;
+    let bt_node_id_regex = &*BT_NODE_ID_REGEX;
+    let bt_end_marker_regex = &*BT_END_MARKER_REGEX;
+    let bt_result_regex = &*BT_RESULT_REGEX;
 
-    // BehaviorTree 中间动作模块正则
-    // [ModuleName] node=ModuleName phase=start ...
-    let bt_module_start_regex = Regex::new(r"\[(\w+)\]\s+node=\w+\s+phase=start")?;
-    // [ModuleName] node=ModuleName phase=end status=success cost_ms=XXX
-    let bt_module_end_regex =
-        Regex::new(r"\[(\w+)\]\s+node=\w+\s+phase=end\s+status=(\w+)\s+cost_ms=(\d+)")?;
-    // [ExecuteDoubleArmMoveAction] result received code=0 message=...
-    let bt_arm_result_regex =
-        Regex::new(r"\[ExecuteDoubleArmMoveAction\]\s+result\s+received\s+code=(\d+)")?;
+    let bt_module_start_regex = &*BT_MODULE_START_REGEX;
+    let bt_module_end_regex = &*BT_MODULE_END_REGEX;
+    let bt_arm_result_regex = &*BT_ARM_RESULT_REGEX;
 
-    // ============================================================
-    // 细化阶段检测正则（BehaviorTreeNode 内部子阶段）
-    // ============================================================
-    // GetReadyPoseAction phase=start/end
-    let get_ready_pose_start_regex = Regex::new(r"node=GetReadyPoseAction\s+phase=start")?;
-    let get_ready_pose_end_regex =
-        Regex::new(r"node=GetReadyPoseAction\s+phase=end\s+status=(\w+)\s+cost_ms=(\d+)")?;
-    // DetObjPose start/done
-    let det_obj_pose_start_regex = Regex::new(r"DetObjPose start camera_id=(\w+).*obj_id=(\d+)")?;
-    let det_obj_pose_response_regex = Regex::new(r"DetObjPose response ret=(\d+)")?;
-    let det_obj_pose_done_regex = Regex::new(r"DetObjPose done goal_pose=")?;
-    // gripper done
-    let gripper_done_regex = Regex::new(r"gripper done status=(\w+) cost_ms=(\d+)")?;
+    let get_ready_pose_start_regex = &*GET_READY_POSE_START_REGEX;
+    let get_ready_pose_end_regex = &*GET_READY_POSE_END_REGEX;
+    let det_obj_pose_start_regex = &*DET_OBJ_POSE_START_REGEX;
+    let det_obj_pose_response_regex = &*DET_OBJ_POSE_RESPONSE_REGEX;
+    let det_obj_pose_done_regex = &*DET_OBJ_POSE_DONE_REGEX;
+    let gripper_done_regex = &*GRIPPER_DONE_REGEX;
 
-    // ============================================================
-    // 手臂动作子阶段正则（BehaviorTreeNode 内部）
-    // ============================================================
-    // gripper start arm=xxx open=xxx
-    let gripper_start_regex = Regex::new(r"gripper start arm=(\w+) open=(\w+)")?;
-    // gripper request: cmd_code=xxx arm=xxx
-    let gripper_request_regex = Regex::new(r"gripper request: cmd_code=(\d+) arm=(\w+)")?;
-    // ArmObstacle start cmd=xxx
-    let arm_obstacle_start_regex = Regex::new(r"ArmObstacle start cmd=(\d+)")?;
-    // ArmObstacle done resp_status=xxx
-    let arm_obstacle_done_regex = Regex::new(r"ArmObstacle done resp_status=(\d+)")?;
-    // arm_transition_point: 只匹配 "- start cmd=" 不匹配 "custom start cmd="（同一操作会输出两行）
-    let arm_transition_start_regex =
-        Regex::new(r"- start cmd=(\d+).*service=arm_transition_point")?;
-    // arm_transition_point 完成: 匹配任意 "custom done" 格式
-    // - custom done reference_state_n=... (ik=0)
-    // - custom done resp_status=... (ik=1)
-    let arm_transition_done_regex =
-        Regex::new(r"custom done (?:resp_status=(\d+)|reference_state_n=)")?;
-    // arm_move start cmd=xxx
-    let arm_move_start_regex = Regex::new(r"arm_move start cmd=(\d+)")?;
-    // arm_move response: success cmd=xxx / result code=xxx
-    let arm_move_response_regex =
-        Regex::new(r"arm_move response: (?:success cmd=(\d+)|result code=(\d+))")?;
+    let gripper_start_regex = &*GRIPPER_START_REGEX;
+    let gripper_request_regex = &*GRIPPER_REQUEST_REGEX;
+    let arm_obstacle_start_regex = &*ARM_OBSTACLE_START_REGEX;
+    let arm_obstacle_done_regex = &*ARM_OBSTACLE_DONE_REGEX;
+    let arm_transition_start_regex = &*ARM_TRANSITION_START_REGEX;
+    let arm_transition_done_regex = &*ARM_TRANSITION_DONE_REGEX;
+    let arm_move_start_regex = &*ARM_MOVE_START_REGEX;
+    let arm_move_response_regex = &*ARM_MOVE_RESPONSE_REGEX;
 
     let mut flows = Vec::new();
     let mut current_flow: Option<NavigationFlow> = None;
@@ -344,11 +489,11 @@ pub fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<Navigatio
                     status: status.clone(),
                     sub_steps: vec![
                         SubStep {
-                            name: "开始".to_string(),
+                            name: t!("substep.start").to_string(),
                             timestamp: start_ts,
                         },
                         SubStep {
-                            name: format!("完成({}ms)", cost_ms),
+                            name: t!("substep.completed_ms", ms = cost_ms).to_string(),
                             timestamp: line.timestamp,
                         },
                     ],
@@ -368,7 +513,7 @@ pub fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<Navigatio
                 for action in ctx.sub_actions.iter_mut().rev() {
                     if action.label.contains("ExecuteDoubleArmMoveAction") {
                         action.sub_steps.push(SubStep {
-                            name: format!("结果(code={})", code),
+                            name: t!("substep.result_code", code = code).to_string(),
                             timestamp: line.timestamp,
                         });
                         break;
@@ -441,9 +586,9 @@ pub fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<Navigatio
                     ctx.sub_actions.push(new_action(
                         "ready_pose",
                         None,
-                        "准备阶段".to_string(),
+                        t!("action.ready_pose").to_string(),
                         line.timestamp,
-                        "GetReadyPose #1 开始".to_string(),
+                        t!("substep.ready_pose_start", n = 1).to_string(),
                     ));
                 } else {
                     // 增加计数
@@ -453,7 +598,7 @@ pub fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<Navigatio
                         for action in ctx.sub_actions.iter_mut().rev() {
                             if action.action_type == "ready_pose" && action.end_ts.is_none() {
                                 action.sub_steps.push(SubStep {
-                                    name: format!("GetReadyPose #{} 开始", count),
+                                    name: t!("substep.ready_pose_start", n = count).to_string(),
                                     timestamp: line.timestamp,
                                 });
                                 break;
@@ -475,7 +620,8 @@ pub fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<Navigatio
                 for action in ctx.sub_actions.iter_mut().rev() {
                     if action.action_type == "ready_pose" && action.end_ts.is_none() {
                         action.sub_steps.push(SubStep {
-                            name: format!("GetReadyPose #{} 完成 ({}ms)", count, cost_ms),
+                            name: t!("substep.ready_pose_done", n = count, ms = cost_ms)
+                                .to_string(),
                             timestamp: line.timestamp,
                         });
                         // 更新结束时间（每次都更新，最终为最后一个的结束时间）
@@ -672,11 +818,11 @@ pub fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<Navigatio
                     },
                     sub_steps: vec![
                         SubStep {
-                            name: "节点开始".to_string(),
+                            name: t!("substep.node_start").to_string(),
                             timestamp: ctx.start_ts,
                         },
                         SubStep {
-                            name: format!("节点结束({})", result_status),
+                            name: t!("substep.node_end", status = result_status).to_string(),
                             timestamp: line.timestamp,
                         },
                     ],
@@ -748,16 +894,16 @@ pub fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<Navigatio
             }
 
             let label = match action_type {
-                "navigation" => "导航".to_string(),
+                "navigation" => t!("action.navigation").to_string(),
                 "arm" => {
                     if let Some(code) = action_code {
-                        format!("双臂({})", code)
+                        t!("action.arm_with_code", code = code).to_string()
                     } else {
-                        "双臂".to_string()
+                        t!("action.arm_label").to_string()
                     }
                 }
-                "waist" => "腰部".to_string(),
-                "head" => "头部".to_string(),
+                "waist" => t!("action.waist").to_string(),
+                "head" => t!("action.head").to_string(),
                 _ => adapter_type.clone(),
             };
 
@@ -766,7 +912,7 @@ pub fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<Navigatio
                 action_code,
                 label,
                 line.timestamp,
-                "开始执行".to_string(),
+                t!("substep.exec_start").to_string(),
             );
 
             // 使用组合键：adapter_type + timestamp 以支持同类型的并发动作
@@ -782,7 +928,7 @@ pub fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<Navigatio
             add_substep_to_adapter(
                 &mut active_adapters,
                 &adapter_type,
-                format!("等待服务器 '{}'...", server_name),
+                t!("substep.wait_server", name = server_name).to_string(),
                 line.timestamp,
             );
             continue;
@@ -794,7 +940,7 @@ pub fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<Navigatio
             add_substep_to_adapter(
                 &mut active_adapters,
                 &adapter_type,
-                "服务器已就绪".to_string(),
+                t!("substep.server_ready").to_string(),
                 line.timestamp,
             );
             continue;
@@ -806,7 +952,7 @@ pub fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<Navigatio
             add_substep_to_adapter(
                 &mut active_adapters,
                 &adapter_type,
-                "发送目标".to_string(),
+                t!("substep.send_goal").to_string(),
                 line.timestamp,
             );
             continue;
@@ -818,7 +964,7 @@ pub fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<Navigatio
             add_substep_to_adapter(
                 &mut active_adapters,
                 &adapter_type,
-                "执行中".to_string(),
+                t!("substep.executing").to_string(),
                 line.timestamp,
             );
             continue;
@@ -831,7 +977,7 @@ pub fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<Navigatio
             add_substep_to_adapter(
                 &mut active_adapters,
                 &adapter_type,
-                format!("[RESULT] 完成，成功: {}", success),
+                t!("substep.result_success", success = success).to_string(),
                 line.timestamp,
             );
             continue;
@@ -849,7 +995,7 @@ pub fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<Navigatio
                         resume_ts: None,
                     });
                     action.sub_steps.push(SubStep {
-                        name: "暂停".to_string(),
+                        name: t!("substep.pause").to_string(),
                         timestamp: line.timestamp,
                     });
                     break;
@@ -871,7 +1017,7 @@ pub fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<Navigatio
                         pause_event.resume_ts = Some(line.timestamp);
                     }
                     action.sub_steps.push(SubStep {
-                        name: "恢复".to_string(),
+                        name: t!("substep.resume").to_string(),
                         timestamp: line.timestamp,
                     });
                     break;
@@ -896,7 +1042,7 @@ pub fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<Navigatio
                         format!("failed_{}", result)
                     };
                     action.sub_steps.push(SubStep {
-                        name: format!("执行完成，结果: {}", result),
+                        name: t!("substep.exec_done", result = result).to_string(),
                         timestamp: line.timestamp,
                     });
                     completed_key = Some(key.clone());
@@ -959,9 +1105,9 @@ pub fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<Navigatio
             let preplan_action = new_action(
                 "preplan",
                 None,
-                format!("预打舵[{}]", action_label),
+                t!("substep.preplan_label", label = action_label).to_string(),
                 line.timestamp,
-                "开始执行".to_string(),
+                t!("substep.exec_start").to_string(),
             );
 
             // 确保有流程可以添加动作
@@ -1010,7 +1156,7 @@ pub fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<Navigatio
                     op.action_code = Some(code);
                 }
                 op.sub_steps.push(SubStep {
-                    name: format!("设置目标→{}", pos_str),
+                    name: t!("substep.set_target", pos = pos_str).to_string(),
                     timestamp: ts,
                 });
             });
@@ -1023,7 +1169,7 @@ pub fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<Navigatio
             let ts = line.timestamp;
             update_preplan_action(&mut current_flow, &mut flows, |op| {
                 op.sub_steps.push(SubStep {
-                    name: format!("响应(code={})", error_code),
+                    name: t!("substep.response_code", code = error_code).to_string(),
                     timestamp: ts,
                 });
             });
@@ -1035,7 +1181,7 @@ pub fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<Navigatio
             let ts = line.timestamp;
             update_preplan_action(&mut current_flow, &mut flows, |op| {
                 op.sub_steps.push(SubStep {
-                    name: "执行成功".to_string(),
+                    name: t!("substep.exec_success").to_string(),
                     timestamp: ts,
                 });
                 op.end_ts = Some(ts);

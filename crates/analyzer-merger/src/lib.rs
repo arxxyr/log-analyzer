@@ -160,7 +160,7 @@ impl TimelineMerger {
         let min_time = all_events
             .iter()
             .map(|e| e.start_time)
-            .min_by(|a, b| a.partial_cmp(b).unwrap())
+            .min_by(|a, b| a.total_cmp(b))
             .unwrap_or(primary_timeline.log_start_time);
 
         let max_time = all_events
@@ -169,7 +169,7 @@ impl TimelineMerger {
                 RSome(t) => Some(*t),
                 _ => None,
             })
-            .max_by(|a, b| a.partial_cmp(b).unwrap())
+            .max_by(|a, b| a.total_cmp(b))
             .unwrap_or(primary_timeline.log_end_time);
 
         // 6. 统计信息

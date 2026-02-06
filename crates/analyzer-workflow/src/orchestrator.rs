@@ -601,7 +601,11 @@ impl WorkflowOrchestrator {
         let local_path = self.config.local.log_dir.join(&file_info.name);
 
         // 检查本地文件是否存在且相同（通过 mtime 和 size 判断）
-        if local_path.exists()
+        // 仅当远程元数据有效（size > 0 且 mtime > 0）时才使用缓存，
+        // 否则始终重新下载（防止 stat 解析失败导致误判）
+        if file_info.size > 0
+            && file_info.mtime > 0
+            && local_path.exists()
             && let Ok(metadata) = fs::metadata(&local_path)
         {
             let local_size = metadata.len();
@@ -612,7 +616,6 @@ impl WorkflowOrchestrator {
                 .map(|d| d.as_secs())
                 .unwrap_or(0);
 
-            // 比较文件大小和修改时间
             if file_info.size == local_size && file_info.mtime == local_mtime {
                 info!("本地文件已存在且与远程相同，跳过下载: {:?}", local_path);
                 return Ok(local_path);

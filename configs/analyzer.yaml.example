@@ -1,12 +1,16 @@
-# Analyzer 主配置文件
+# Analyzer 主配置文件（示例）
 # 用途：定义远程连接、日志发现规则和插件映射
+#
+# 使用方法：
+#   cp configs/analyzer.yaml.example configs/analyzer.yaml
+#   然后修改 analyzer.yaml 中的实际连接信息
 
 # 远程连接配置
 remote:
   enabled: true
-  host: "192.168.5.101"
+  host: "192.168.x.x"
   port: 22
-  user: "linux"
+  user: "your_user"
   # 认证方式（优先级从高到低）
   auth:
     # 1. SSH 密钥（推荐）
@@ -14,10 +18,10 @@ remote:
     # 2. SSH Agent
     # use_agent: true
     # 3. 密码（不推荐，可留空由运行时输入）
-    password: "linux"
+    password: "your_password"
 
   # 日志目录配置
-  log_dir: "/home/linux/.ros/log"
+  log_dir: "/home/your_user/.ros/log"
 
   # 超时配置（秒）
   timeouts:

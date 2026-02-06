@@ -13,7 +13,7 @@ analyzer-remote = { path = "../analyzer-remote" }
 
 # 序列化
 serde = { workspace = true }
-serde_yaml = { workspace = true }
+serde_yaml_ng = { workspace = true }
 serde_json = { workspace = true }
 
 # 文件匹配

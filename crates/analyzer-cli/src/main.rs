@@ -337,9 +337,20 @@ impl PluginManager {
     }
 
     fn find_by_name(&self, name: &str) -> Option<&PluginInfo> {
-        self.plugins
-            .iter()
-            .find(|p| p.name == name || p.name.contains(name))
+        // 精确匹配优先
+        self.plugins.iter().find(|p| p.name == name).or_else(|| {
+            // 回退到模糊匹配，但只在恰好一个候选时返回
+            let candidates: Vec<_> = self
+                .plugins
+                .iter()
+                .filter(|p| p.name.contains(name))
+                .collect();
+            if candidates.len() == 1 {
+                Some(candidates[0])
+            } else {
+                None
+            }
+        })
     }
 
     fn list_plugins(&self) {
@@ -621,6 +632,78 @@ fn run_multi_file_analysis(
     Ok(results)
 }
 
+/// 清理旧输出文件（png、csv 及批量子目录）
+fn cleanup_old_output(output_dir: &Path) -> Result<()> {
+    if !output_dir.exists() {
+        return Ok(());
+    }
+    info!("{}", t!("msg.cleanup_old_output"));
+    for entry in fs::read_dir(output_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_file() {
+            let ext = path.extension().and_then(|e| e.to_str());
+            if matches!(ext, Some("png") | Some("csv")) {
+                let _ = fs::remove_file(path);
+            }
+        } else if path.is_dir() {
+            let _ = fs::remove_dir_all(&path);
+        }
+    }
+    Ok(())
+}
+
+/// 执行自动工作流（Auto 和默认模式共用逻辑）
+fn run_auto_mode(config: &AnalyzerConfig, plugin_manager: &PluginManager) -> Result<()> {
+    // 清理旧输出
+    if config.local.cleanup_old_output {
+        cleanup_old_output(&config.local.output_dir)?;
+    }
+
+    // 执行自动工作流
+    let mut orchestrator = WorkflowOrchestrator::new(config.clone())?;
+    let result = orchestrator.run_auto()?;
+
+    if !result.success {
+        error!("{}", t!("msg.workflow_failed"));
+        for err in &result.errors {
+            error!("  - {}", err);
+        }
+        anyhow::bail!("{}", t!("err.workflow_failed"));
+    }
+
+    // 检查是否为多文件模式
+    if !result.analysis_tasks.is_empty() {
+        info!(
+            "{}",
+            t!("msg.multi_file_mode", count = result.analysis_tasks.len())
+        );
+
+        let analysis_results =
+            run_multi_file_analysis(&result.analysis_tasks, plugin_manager, config)?;
+
+        if analysis_results.len() > 1 {
+            merge_and_visualize(&analysis_results, config, "auto")?;
+        }
+    } else {
+        // 单文件模式（向后兼容）
+        let file_to_analyze = result
+            .analyzed_file
+            .context(t!("err.no_file_to_analyze").to_string())?;
+        let plugin_name = result
+            .selected_plugin
+            .context(t!("err.no_plugin_selected").to_string())?;
+
+        let plugin = plugin_manager
+            .find_by_name(&plugin_name)
+            .with_context(|| t!("err.plugin_not_found", name = &plugin_name).to_string())?;
+
+        run_analysis(plugin, &file_to_analyze, &config.local.output_dir)?;
+    }
+
+    Ok(())
+}
+
 /// 合并多个 Timeline 并生成统一甘特图
 fn merge_and_visualize(
     results: &[AnalyzeResult],
@@ -864,7 +947,6 @@ fn main() -> Result<()> {
         }
 
         Some(Commands::Auto { pattern, output }) => {
-            // 如果提供了覆盖参数，更新配置
             let mut config = config;
             if let Some(p) = pattern
                 && let Some(first_analyzer) = config.analyzers.first_mut()
@@ -875,66 +957,7 @@ fn main() -> Result<()> {
                 config.local.output_dir = o;
             }
 
-            // 清理旧输出
-            if config.local.cleanup_old_output && config.local.output_dir.exists() {
-                info!("{}", t!("msg.cleanup_old_output"));
-                for entry in fs::read_dir(&config.local.output_dir)? {
-                    let entry = entry?;
-                    let path = entry.path();
-                    if path.is_file() {
-                        let ext = path.extension().and_then(|e| e.to_str());
-                        if matches!(ext, Some("png") | Some("csv")) {
-                            let _ = fs::remove_file(path);
-                        }
-                    } else if path.is_dir() {
-                        // 清理批量模式创建的子目录
-                        let _ = fs::remove_dir_all(&path);
-                    }
-                }
-            }
-
-            // 执行自动工作流
-            let mut orchestrator = WorkflowOrchestrator::new(config.clone())?;
-            let result = orchestrator.run_auto()?;
-
-            if !result.success {
-                error!("{}", t!("msg.workflow_failed"));
-                for err in &result.errors {
-                    error!("  - {}", err);
-                }
-                anyhow::bail!("{}", t!("err.workflow_failed"));
-            }
-
-            // 检查是否为多文件模式
-            if !result.analysis_tasks.is_empty() {
-                info!(
-                    "{}",
-                    t!("msg.multi_file_mode", count = result.analysis_tasks.len())
-                );
-
-                // 使用责任链模式执行多文件分析
-                let analysis_results =
-                    run_multi_file_analysis(&result.analysis_tasks, &plugin_manager, &config)?;
-
-                // 如果有多个结果，合并并生成统一甘特图
-                if analysis_results.len() > 1 {
-                    merge_and_visualize(&analysis_results, &config, "auto")?;
-                }
-            } else {
-                // 单文件模式（向后兼容）
-                let file_to_analyze = result
-                    .analyzed_file
-                    .context(t!("err.no_file_to_analyze").to_string())?;
-                let plugin_name = result
-                    .selected_plugin
-                    .context(t!("err.no_plugin_selected").to_string())?;
-
-                let plugin = plugin_manager
-                    .find_by_name(&plugin_name)
-                    .with_context(|| t!("err.plugin_not_found", name = &plugin_name).to_string())?;
-
-                run_analysis(plugin, &file_to_analyze, &config.local.output_dir)?;
-            }
+            run_auto_mode(&config, &plugin_manager)?;
         }
 
         Some(Commands::Analyze {
@@ -1039,7 +1062,7 @@ fn main() -> Result<()> {
                         for entry in entries.flatten() {
                             let path = entry.path();
                             if let Some(file_name) = path.file_name().and_then(|n| n.to_str())
-                                && glob_match::glob_match(pattern, file_name)
+                                && glob::Pattern::new(pattern).is_ok_and(|p| p.matches(file_name))
                             {
                                 files_to_analyze.push((path.clone(), pattern.clone()));
                                 info!(
@@ -1062,285 +1085,42 @@ fn main() -> Result<()> {
                 t!("msg.files_to_analyze", count = files_to_analyze.len())
             );
 
-            // 2. 按主时间轴优先排序（责任链模式）
-            // 先找出哪些文件对应主时间轴
-            let mut files_with_priority: Vec<(PathBuf, String, bool)> = files_to_analyze
+            // 2. 构建 AnalysisTask 列表，复用 run_multi_file_analysis
+            let tasks: Vec<AnalysisTask> = files_to_analyze
                 .into_iter()
                 .map(|(path, pattern)| {
-                    let is_primary = config
-                        .analyzers
-                        .iter()
-                        .find(|a| a.pattern == pattern)
-                        .map(|a| a.is_primary)
-                        .unwrap_or(false);
-                    (path, pattern, is_primary)
+                    let analyzer = config.analyzers.iter().find(|a| a.pattern == pattern);
+                    let plugin_name = analyzer.map(|a| a.plugin.clone()).unwrap_or_default();
+                    let is_primary = analyzer.map(|a| a.is_primary).unwrap_or(false);
+                    let file_name = path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or_default()
+                        .to_string();
+
+                    AnalysisTask {
+                        file_name,
+                        local_file: path,
+                        plugin_name,
+                        pattern,
+                        is_primary,
+                    }
                 })
                 .collect();
 
-            // 主时间轴优先
-            files_with_priority.sort_by_key(|f| std::cmp::Reverse(f.2));
+            // 3. 分析所有文件（责任链模式）
+            let analysis_results = run_multi_file_analysis(&tasks, &plugin_manager, &config)?;
 
-            // 3. 分析每个文件并收集时间线（责任链模式）
-            let mut timelines = Vec::new();
-            let mut context: Option<AnalyzerContext> = None;
-
-            for (file_path, pattern, is_primary) in &files_with_priority {
-                info!(
-                    "{}",
-                    t!(
-                        "msg.analyzing_with_primary",
-                        path = file_path.display().to_string(),
-                        is_primary = is_primary
-                    )
-                );
-
-                // 根据 pattern 找到对应的 analyzer 配置
-                let analyzer_mapping = config
-                    .analyzers
-                    .iter()
-                    .find(|a| a.pattern == *pattern)
-                    .context(t!("err.no_analyzer_config").to_string())?;
-
-                // 查找插件
-                let plugin = plugin_manager
-                    .find_by_name(&analyzer_mapping.plugin)
-                    .with_context(|| {
-                        t!("err.plugin_not_found", name = &analyzer_mapping.plugin).to_string()
-                    })?;
-
-                // 准备分析参数（非主时间轴传递上下文）
-                let extra_args = if *is_primary {
-                    None
-                } else {
-                    context
-                        .as_ref()
-                        .and_then(|ctx| serde_json::to_string(ctx).ok())
-                        .map(RString::from)
-                };
-
-                let analyze_args = AnalyzeArgs {
-                    input_file: RString::from(
-                        file_path
-                            .to_str()
-                            .context(t!("err.invalid_path").to_string())?,
-                    ),
-                    output_dir: RString::from(
-                        config
-                            .local
-                            .output_dir
-                            .to_str()
-                            .context(t!("err.invalid_path").to_string())?,
-                    ),
-                    extra_args: extra_args.into(),
-                    locale: RString::from(get_current_locale()),
-                };
-
-                // 执行分析
-                let result = plugin
-                    .plugin
-                    .analyze(analyze_args)
-                    .into_result()
-                    .with_context(|| {
-                        t!(
-                            "err.analyze_file_failed",
-                            path = file_path.display().to_string()
-                        )
-                        .to_string()
-                    })?;
-
-                // 如果是主时间轴，提取轮次时间范围作为上下文
-                if *is_primary {
-                    let ranges = extract_round_time_ranges(&result.timeline);
-                    info!("{}", t!("msg.extracted_rounds", count = ranges.len()));
-                    context = Some(AnalyzerContext {
-                        round_time_ranges: ranges,
-                    });
-                }
-
-                // 收集时间线
-                timelines.push(result.timeline);
-
-                info!(
-                    "{}",
-                    t!("msg.analysis_done", summary = result.summary.as_str())
-                );
-            }
-
-            // 3. 合并时间线
-            info!("{}", t!("msg.merging_timelines"));
-
-            let merge_config = MergeConfig {
-                primary_source: config.multi_file.alignment.primary_source.clone(),
-                time_tolerance: config.multi_file.alignment.time_tolerance,
-                alignment_strategy: match config.multi_file.alignment.strategy {
-                    analyzer_workflow::config::AlignmentStrategy::Timestamp => {
-                        AlignmentStrategy::Timestamp
-                    }
-                    analyzer_workflow::config::AlignmentStrategy::EventBased => {
-                        AlignmentStrategy::EventBased
-                    }
-                },
-                track_priority: config.multi_file.track_priority.clone(),
-            };
-
-            let merger = TimelineMerger::new(merge_config);
-            let merged = merger.merge(timelines)?;
-
-            info!("{}", t!("msg.merge_complete", count = merged.events.len()));
-
-            // 4. 生成统一的甘特图
-            let output_path = config
-                .local
-                .output_dir
-                .join(format!("{}_gantt.png", prefix));
-
-            info!(
-                "{}",
-                t!(
-                    "msg.generating_gantt",
-                    path = output_path.display().to_string()
-                )
-            );
-
-            // 从配置文件动态创建可视化配置
-            let vis_config = create_visualization_config(&config);
-            let generator = GanttChartGenerator::new(vis_config);
-
-            generator.generate_gantt_chart(
-                &merged,
-                output_path
-                    .to_str()
-                    .context(t!("err.invalid_path").to_string())?,
-                &format!("{} - {}", t!("msg.multi_analysis_complete"), prefix),
-            )?;
-
-            println!("\n{}", t!("msg.multi_analysis_complete"));
-            println!(
-                "{}",
-                t!("msg.analyzed_file_count", count = files_with_priority.len())
-            );
-            println!(
-                "{}",
-                t!("msg.merged_event_count", count = merged.events.len())
-            );
-            println!(
-                "{}",
-                t!(
-                    "msg.gantt_chart_path",
-                    path = output_path.display().to_string()
-                )
-            );
+            // 4. 合并并生成统一甘特图
+            merge_and_visualize(&analysis_results, &config, &prefix)?;
         }
 
         None => {
             // 默认行为：执行 auto 模式
             info!("{}", t!("msg.no_command_auto"));
-
-            // 清理旧输出
-            if config.local.cleanup_old_output && config.local.output_dir.exists() {
-                info!("{}", t!("msg.cleanup_old_output"));
-                for entry in fs::read_dir(&config.local.output_dir)? {
-                    let entry = entry?;
-                    let path = entry.path();
-                    if path.is_file() {
-                        let ext = path.extension().and_then(|e| e.to_str());
-                        if matches!(ext, Some("png") | Some("csv")) {
-                            let _ = fs::remove_file(path);
-                        }
-                    } else if path.is_dir() {
-                        // 清理批量模式创建的子目录
-                        let _ = fs::remove_dir_all(&path);
-                    }
-                }
-            }
-
-            // 执行自动工作流
-            let mut orchestrator = WorkflowOrchestrator::new(config.clone())?;
-            let result = orchestrator.run_auto()?;
-
-            if !result.success {
-                error!("{}", t!("msg.workflow_failed"));
-                for err in &result.errors {
-                    error!("  - {}", err);
-                }
-                anyhow::bail!("{}", t!("err.workflow_failed"));
-            }
-
-            // 检查是否为多文件模式
-            if !result.analysis_tasks.is_empty() {
-                info!(
-                    "{}",
-                    t!("msg.multi_file_mode", count = result.analysis_tasks.len())
-                );
-
-                // 使用责任链模式执行多文件分析
-                let analysis_results =
-                    run_multi_file_analysis(&result.analysis_tasks, &plugin_manager, &config)?;
-
-                // 如果有多个结果，合并并生成统一甘特图
-                if analysis_results.len() > 1 {
-                    merge_and_visualize(&analysis_results, &config, "auto")?;
-                }
-            } else {
-                // 单文件模式（向后兼容）
-                let file_to_analyze = result
-                    .analyzed_file
-                    .context(t!("err.no_file_to_analyze").to_string())?;
-                let plugin_name = result
-                    .selected_plugin
-                    .context(t!("err.no_plugin_selected").to_string())?;
-
-                let plugin = plugin_manager
-                    .find_by_name(&plugin_name)
-                    .with_context(|| t!("err.plugin_not_found", name = &plugin_name).to_string())?;
-
-                run_analysis(plugin, &file_to_analyze, &config.local.output_dir)?;
-            }
+            run_auto_mode(&config, &plugin_manager)?;
         }
     }
 
     Ok(())
-}
-
-// 简单的 glob 匹配实现
-mod glob_match {
-    pub fn glob_match(pattern: &str, text: &str) -> bool {
-        // 简化版的 glob 匹配，支持 * 通配符
-        let pattern_parts: Vec<&str> = pattern.split('*').collect();
-
-        if pattern_parts.len() == 1 {
-            // 没有通配符，直接比较
-            return pattern == text;
-        }
-
-        let mut text_pos = 0;
-
-        for (i, part) in pattern_parts.iter().enumerate() {
-            if part.is_empty() {
-                continue;
-            }
-
-            if i == 0 {
-                // 第一个部分必须在开头
-                if !text.starts_with(part) {
-                    return false;
-                }
-                text_pos = part.len();
-            } else if i == pattern_parts.len() - 1 {
-                // 最后一个部分必须在结尾
-                if !text.ends_with(part) {
-                    return false;
-                }
-            } else {
-                // 中间部分
-                if let Some(pos) = text[text_pos..].find(part) {
-                    text_pos += pos + part.len();
-                } else {
-                    return false;
-                }
-            }
-        }
-
-        true
-    }
 }

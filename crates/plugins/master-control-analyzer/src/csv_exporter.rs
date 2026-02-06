@@ -318,7 +318,7 @@ pub fn generate_action_timeline_csv(
     }
 
     // 按开始时间排序
-    all_actions.sort_by(|a, b| a.start_time_rel.partial_cmp(&b.start_time_rel).unwrap());
+    all_actions.sort_by(|a, b| a.start_time_rel.total_cmp(&b.start_time_rel));
 
     // 写入CSV文件
     let file_path = format!("{}/action_timeline.csv", outdir);

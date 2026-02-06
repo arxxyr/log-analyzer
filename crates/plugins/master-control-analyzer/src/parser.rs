@@ -3,6 +3,7 @@
 //! 本模块负责从日志文件中提取带时间戳的日志行
 
 use std::fs;
+use std::sync::LazyLock;
 
 use anyhow::Result;
 use chrono::{NaiveDateTime, TimeZone};
@@ -10,6 +11,17 @@ use chrono_tz::Asia::Shanghai;
 use regex::Regex;
 
 use crate::models::LogLine;
+
+/// 新格式时间戳：YYYY-MM-DD HH:MM:SS.microseconds
+static NEW_TS_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\.\d+)")
+        .expect("invalid regex: NEW_TS_REGEX")
+});
+/// 旧格式时间戳：[INFO/WARN/ERROR/DEBUG] [timestamp]
+static OLD_TS_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\[(?:INFO|WARN|ERROR|DEBUG)\]\s*\[(\d{9,}\.\d+)\]")
+        .expect("invalid regex: OLD_TS_REGEX")
+});
 
 /// 将日期时间字符串转换为 Unix 时间戳
 ///
@@ -59,10 +71,9 @@ pub fn load_log_lines(log_path: &str) -> Result<Vec<LogLine>> {
         }
     };
 
-    // 新格式时间戳：YYYY-MM-DD HH:MM:SS.microseconds
-    let new_ts_regex = Regex::new(r"^(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\.\d+)")?;
-    // 旧格式时间戳：[INFO/WARN/ERROR/DEBUG] [timestamp]
-    let old_ts_regex = Regex::new(r"\[(?:INFO|WARN|ERROR|DEBUG)\]\s*\[(\d{9,}\.\d+)\]")?;
+    // 引用静态预编译正则
+    let new_ts_regex = &*NEW_TS_REGEX;
+    let old_ts_regex = &*OLD_TS_REGEX;
 
     let mut lines = Vec::new();
 
@@ -90,6 +101,6 @@ pub fn load_log_lines(log_path: &str) -> Result<Vec<LogLine>> {
     }
 
     // 按时间戳排序
-    lines.sort_by(|a, b| a.timestamp.partial_cmp(&b.timestamp).unwrap());
+    lines.sort_by(|a, b| a.timestamp.total_cmp(&b.timestamp));
     Ok(lines)
 }

@@ -638,7 +638,7 @@ impl AnalyzerConfig {
 
         let content = fs::read_to_string(path)?;
 
-        let config: AnalyzerConfig = serde_yaml::from_str(&content)
+        let config: AnalyzerConfig = serde_yaml_ng::from_str(&content)
             .map_err(|e| ConfigError::ParseError(format!("YAML 解析失败: {}", e)))?;
 
         config.validate()?;
@@ -647,7 +647,7 @@ impl AnalyzerConfig {
 
     /// 保存配置到文件
     pub fn save_to_file<P: AsRef<Path>>(&self, path: P) -> Result<()> {
-        let content = serde_yaml::to_string(self)
+        let content = serde_yaml_ng::to_string(self)
             .map_err(|e| ConfigError::ParseError(format!("YAML 序列化失败: {}", e)))?;
 
         fs::write(path, content)?;

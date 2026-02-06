@@ -10,6 +10,31 @@ use std::time::Duration;
 use thiserror::Error;
 use tracing::{debug, info, warn};
 
+/// 对 shell 参数进行转义，防止命令注入
+///
+/// 将字符串用单引号包裹，并对内部的单引号进行转义：
+/// `it's` → `'it'\''s'`
+fn shell_escape(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
+/// 验证 glob 模式是否安全（不含命令注入字符）
+///
+/// 允许的字符：字母、数字、`_`、`-`、`.`、`*`、`?`、`[`、`]`
+fn validate_glob_pattern(pattern: &str) -> std::result::Result<(), SshError> {
+    if pattern.is_empty() {
+        return Err(SshError::CommandFailed("glob 模式不能为空".to_string()));
+    }
+    for ch in pattern.chars() {
+        if !(ch.is_alphanumeric() || matches!(ch, '_' | '-' | '.' | '*' | '?' | '[' | ']')) {
+            return Err(SshError::CommandFailed(format!(
+                "glob 模式包含不安全字符: '{ch}'"
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// SSH 错误类型
 #[derive(Error, Debug)]
 pub enum SshError {
@@ -255,14 +280,18 @@ impl SshConnection {
     pub fn list_files(&mut self, path: &str, pattern: &str) -> Result<Vec<RemoteFileInfo>> {
         debug!("列出远程文件: {} 模式: {}", path, pattern);
 
+        // 验证 glob 模式安全性，防止命令注入
+        validate_glob_pattern(pattern)?;
+
         // 构造命令：列出文件并获取详细信息
+        // path 使用 shell_escape 转义，pattern 已经通过安全验证
+        let escaped_path = shell_escape(path);
         let command = format!(
-            "cd {} && ls -t {} 2>/dev/null | while read f; do \
+            "cd {escaped_path} && ls -t {pattern} 2>/dev/null | while read f; do \
              if [ -f \"$f\" ]; then \
                stat -c '%n|%s|%Y' \"$f\" 2>/dev/null || stat -f '%N|%z|%m' \"$f\" 2>/dev/null; \
              fi; \
-             done",
-            path, pattern
+             done"
         );
 
         let output = self.execute(&command)?;
@@ -299,9 +328,10 @@ impl SshConnection {
 
         // 列出所有以数字开头的目录，按名称降序排列（最新日期在前）
         // 日期格式：YYYYMMDD（8位数字）
+        // 使用 shell_escape 防止命令注入
+        let escaped_base = shell_escape(base_path);
         let command = format!(
-            "ls -1d {}/[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9] 2>/dev/null | sort -r | head -1",
-            base_path
+            "ls -1d {escaped_base}/[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9] 2>/dev/null | sort -r | head -1"
         );
 
         let output = self.execute(&command)?;
