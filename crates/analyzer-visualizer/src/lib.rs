@@ -10,6 +10,10 @@
 //! - 高分辨率输出（可配置）
 //! - 自动时间轴标注
 
+// i18n 初始化
+rust_i18n::i18n!("locales", fallback = "zh-CN");
+use rust_i18n::t;
+
 use analyzer_core::timeline::*;
 use analyzer_merger::MergedTimeline;
 use anyhow::Result;
@@ -18,6 +22,18 @@ use std::collections::HashMap;
 
 mod font_loader;
 use font_loader::FontLoader;
+
+/// 预检字体可用性
+///
+/// 在程序启动时调用，检测生成甘特图所需的字体是否可用。
+/// 如果字体不可用，打印警告但不阻止程序继续运行。
+pub fn check_font_availability() {
+    let loader = FontLoader::default();
+    if let Err(e) = loader.validate() {
+        tracing::warn!("{}", e);
+        eprintln!("[字体] 甘特图生成可能失败，CSV 分析结果不受影响");
+    }
+}
 
 /// 可视化配置
 #[derive(Debug, Clone)]
@@ -118,7 +134,7 @@ impl GanttChartGenerator {
         title: &str,
     ) -> Result<()> {
         if merged.events.is_empty() {
-            anyhow::bail!("没有事件可以可视化");
+            anyhow::bail!("{}", t!("err.no_events"));
         }
 
         // 创建字体加载器
@@ -276,15 +292,15 @@ impl GanttChartGenerator {
     /// Track 转换为字符串（用于Y轴标签显示）
     fn track_name_to_string(&self, track: &Track) -> String {
         match track {
-            Track::RoundMarker => "轮次标记".to_string(),
-            Track::Navigation => "导航".to_string(),
-            Track::Arm => "机械臂".to_string(),
-            Track::Head => "头部".to_string(),
-            Track::Waist => "腰部".to_string(),
+            Track::RoundMarker => t!("track.round_marker").to_string(),
+            Track::Navigation => t!("track.navigation").to_string(),
+            Track::Arm => t!("track.arm").to_string(),
+            Track::Head => t!("track.head").to_string(),
+            Track::Waist => t!("track.waist").to_string(),
             Track::Custom(name) => {
-                // 自定义泳道的中文名称映射
+                // 自定义泳道的名称映射
                 match name.as_str() {
-                    "PrePlanNavigation" => "预打舵".to_string(),
+                    "PrePlanNavigation" => t!("track.preplan").to_string(),
                     _ => name.to_string(),
                 }
             }
@@ -402,12 +418,15 @@ mod tests {
     fn test_track_name_conversion() {
         let generator = GanttChartGenerator::with_defaults();
 
-        assert_eq!(
-            generator.track_name_to_string(&Track::RoundMarker),
-            "轮次标记"
-        );
-        assert_eq!(generator.track_name_to_string(&Track::Navigation), "导航");
-        assert_eq!(generator.track_name_to_string(&Track::Arm), "机械臂");
+        // 测试泳道名称转换（依赖当前语言设置）
+        let round_marker_name = generator.track_name_to_string(&Track::RoundMarker);
+        let nav_name = generator.track_name_to_string(&Track::Navigation);
+        let arm_name = generator.track_name_to_string(&Track::Arm);
+
+        // 确保返回非空字符串
+        assert!(!round_marker_name.is_empty());
+        assert!(!nav_name.is_empty());
+        assert!(!arm_name.is_empty());
     }
 
     #[test]

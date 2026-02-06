@@ -3,18 +3,19 @@
 //! 本模块负责将分析结果导出为CSV文件
 
 use anyhow::Result;
+use rust_i18n::t;
 
 use crate::models::{ActionOperation, CsvRecord, NavigationFlow, Round};
 use crate::utils::timestamp_to_beijing_time;
 
-/// 将动作类型转换为中文显示名称
+/// 将动作类型转换为本地化显示名称
 fn action_type_to_display(action_type: &str) -> String {
     match action_type {
-        "navigation" => "导航".to_string(),
-        "arm" => "机械臂".to_string(),
-        "head" => "头部".to_string(),
-        "waist" => "腰部".to_string(),
-        "preplan" => "预打舵".to_string(),
+        "navigation" => t!("action.navigation").to_string(),
+        "arm" => t!("action.arm").to_string(),
+        "head" => t!("action.head").to_string(),
+        "waist" => t!("action.waist").to_string(),
+        "preplan" => t!("action.preplan").to_string(),
         _ => action_type.to_string(),
     }
 }
@@ -22,14 +23,15 @@ fn action_type_to_display(action_type: &str) -> String {
 /// 生成动作标签
 fn build_action_label(operation: &ActionOperation) -> String {
     match operation.action_type.as_str() {
-        "navigation" => "导航".to_string(),
+        "navigation" => t!("action.navigation").to_string(),
         "arm" => format!(
-            "机械臂:{}(code:{})",
+            "{}:{}(code:{})",
+            t!("action.arm"),
             operation.label,
             operation.action_code.unwrap_or(0)
         ),
-        "head" => "头部控制".to_string(),
-        "waist" => "腰部控制".to_string(),
+        "head" => t!("label.head_control").to_string(),
+        "waist" => t!("label.waist_control").to_string(),
         "preplan" => operation.label.clone(),
         _ => operation.label.clone(),
     }
@@ -323,40 +325,40 @@ pub fn generate_action_timeline_csv(
     let mut wtr = csv::Writer::from_path(&file_path)?;
 
     wtr.write_record([
-        "序号",
-        "轮次",
-        "流程",
-        "动作类型",
-        "动作详情",
-        "阶段",
-        "开始时间(秒)",
-        "结束时间(秒)",
-        "持续时间(秒)",
-        "开始时间(北京)",
-        "结束时间(北京)",
-        "状态",
+        t!("csv.seq_num").to_string(),
+        t!("csv.round").to_string(),
+        t!("csv.flow").to_string(),
+        t!("csv.action_type").to_string(),
+        t!("csv.action_detail").to_string(),
+        t!("csv.phase").to_string(),
+        t!("csv.start_time").to_string(),
+        t!("csv.end_time").to_string(),
+        t!("csv.duration").to_string(),
+        t!("csv.start_beijing").to_string(),
+        t!("csv.end_beijing").to_string(),
+        t!("csv.status").to_string(),
     ])?;
 
     for (idx, action) in all_actions.iter().enumerate() {
         let seq_num = (idx + 1).to_string();
-        let round_str = format!("Round {}", action.round_id);
-        let flow_str = format!("Flow {}", action.flow_id);
+        let round_str = format!("{} {}", t!("csv.round"), action.round_id);
+        let flow_str = format!("{} {}", t!("csv.flow"), action.flow_id);
 
         let start_rel_str = format!("{:.3}", action.start_time_rel);
         let end_rel_str = action
             .end_time_rel
             .map(|e| format!("{:.3}", e))
-            .unwrap_or_else(|| "N/A".to_string());
+            .unwrap_or_else(|| t!("csv.na").to_string());
         let duration_str = action
             .duration
             .map(|d| format!("{:.3}", d))
-            .unwrap_or_else(|| "N/A".to_string());
+            .unwrap_or_else(|| t!("csv.na").to_string());
 
         let start_beijing = timestamp_to_beijing_time(action.start_time_abs);
         let end_beijing = action
             .end_time_abs
             .map(timestamp_to_beijing_time)
-            .unwrap_or_else(|| "未完成".to_string());
+            .unwrap_or_else(|| t!("csv.not_completed").to_string());
 
         wtr.write_record(&[
             seq_num,
@@ -386,39 +388,72 @@ pub fn generate_action_timeline_csv(
         .count();
     let pending_actions = total_actions - completed_actions;
 
+    // 动态获取本地化的动作类型名称用于过滤
+    let nav_label = t!("action.navigation").to_string();
+    let arm_label = t!("action.arm").to_string();
+    let head_label = t!("action.head").to_string();
+    let waist_label = t!("action.waist").to_string();
+
+    let nav_count = all_actions
+        .iter()
+        .filter(|a| a.action_type == nav_label)
+        .count();
+    let arm_count = all_actions
+        .iter()
+        .filter(|a| a.action_type == arm_label)
+        .count();
+    let head_count = all_actions
+        .iter()
+        .filter(|a| a.action_type == head_label)
+        .count();
+    let waist_count = all_actions
+        .iter()
+        .filter(|a| a.action_type == waist_label)
+        .count();
+
     let stats_path = format!("{}/action_timeline_stats.txt", outdir);
     let stats_content = format!(
-        "动作时间轴统计\n\
+        "{}\n\
         ==============\n\
-        总动作数: {}\n\
-        已完成: {} ({:.1}%)\n\
-        未完成: {} ({:.1}%)\n\n\
-        各类型动作统计:\n\
-        导航: {} 个\n\
-        机械臂: {} 个\n\
-        头部: {} 个\n\
-        腰部: {} 个\n",
-        total_actions,
-        completed_actions,
-        (completed_actions as f64 / total_actions as f64 * 100.0),
-        pending_actions,
-        (pending_actions as f64 / total_actions as f64 * 100.0),
-        all_actions
-            .iter()
-            .filter(|a| a.action_type == "导航")
-            .count(),
-        all_actions
-            .iter()
-            .filter(|a| a.action_type == "机械臂")
-            .count(),
-        all_actions
-            .iter()
-            .filter(|a| a.action_type == "头部")
-            .count(),
-        all_actions
-            .iter()
-            .filter(|a| a.action_type == "腰部")
-            .count(),
+        {}\n\
+        {}\n\
+        {}\n\n\
+        {}\n\
+        {}\n\
+        {}\n\
+        {}\n\
+        {}\n",
+        t!("timeline_stats.title"),
+        t!("timeline_stats.total", count = total_actions),
+        t!(
+            "timeline_stats.completed",
+            count = completed_actions,
+            percent = if total_actions > 0 {
+                format!(
+                    "{:.1}",
+                    completed_actions as f64 / total_actions as f64 * 100.0
+                )
+            } else {
+                "0.0".to_string()
+            }
+        ),
+        t!(
+            "timeline_stats.pending",
+            count = pending_actions,
+            percent = if total_actions > 0 {
+                format!(
+                    "{:.1}",
+                    pending_actions as f64 / total_actions as f64 * 100.0
+                )
+            } else {
+                "0.0".to_string()
+            }
+        ),
+        t!("timeline_stats.by_type"),
+        t!("timeline_stats.nav_count", count = nav_count),
+        t!("timeline_stats.arm_count", count = arm_count),
+        t!("timeline_stats.head_count", count = head_count),
+        t!("timeline_stats.waist_count", count = waist_count),
     );
 
     std::fs::write(&stats_path, stats_content)?;

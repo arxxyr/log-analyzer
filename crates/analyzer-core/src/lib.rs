@@ -129,6 +129,8 @@ pub struct AnalyzeArgs {
     pub output_dir: RString,
     /// 额外参数（插件特定，JSON 格式）
     pub extra_args: ROption<RString>,
+    /// 语言设置（如 "zh-CN", "en"），用于国际化
+    pub locale: RString,
 }
 
 /// 分析结果（v2 - 包含时间线数据）
@@ -225,7 +227,9 @@ mod tests {
             input_file: "/path/to/log.log".into(),
             output_dir: "/output".into(),
             extra_args: RSome("{\"key\": \"value\"}".into()),
+            locale: "zh-CN".into(),
         };
         assert_eq!(args.input_file.as_str(), "/path/to/log.log");
+        assert_eq!(args.locale.as_str(), "zh-CN");
     }
 }

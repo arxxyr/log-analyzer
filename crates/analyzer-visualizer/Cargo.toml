@@ -26,7 +26,7 @@ chrono = { workspace = true }
 # 日志
 tracing = { workspace = true }
 
-# 文件系统和路径
-dirs = { workspace = true }
+# 国际化
+rust-i18n = { workspace = true }
 
 [dev-dependencies]

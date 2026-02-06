@@ -46,3 +46,6 @@ tokio = { workspace = true }
 
 # 内存分配器
 mimalloc = { workspace = true }
+
+# 国际化
+rust-i18n = { workspace = true }
