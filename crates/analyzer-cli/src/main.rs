@@ -679,12 +679,7 @@ fn run_auto_mode(config: &AnalyzerConfig, plugin_manager: &PluginManager) -> Res
             t!("msg.multi_file_mode", count = result.analysis_tasks.len())
         );
 
-        let analysis_results =
-            run_multi_file_analysis(&result.analysis_tasks, plugin_manager, config)?;
-
-        if analysis_results.len() > 1 {
-            merge_and_visualize(&analysis_results, config, "auto")?;
-        }
+        run_multi_file_analysis(&result.analysis_tasks, plugin_manager, config)?;
     } else {
         // 单文件模式（向后兼容）
         let file_to_analyze = result

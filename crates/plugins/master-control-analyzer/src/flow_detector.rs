@@ -180,9 +180,9 @@ static GET_READY_POSE_END_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"node=GetReadyPoseAction\s+phase=end\s+status=(\w+)\s+cost_ms=(\d+)")
         .expect("invalid regex: GET_READY_POSE_END_REGEX")
 });
-/// DetObjPose start
+/// DetObjPose start[single] camera_id=xxx obj_id=N（[single] 等标签为可选）
 static DET_OBJ_POSE_START_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"DetObjPose start camera_id=(\w+).*obj_id=(\d+)")
+    Regex::new(r"DetObjPose start(?:\[\w+\])?\s+camera_id=(\w+).*obj_id=(\d+)")
         .expect("invalid regex: DET_OBJ_POSE_START_REGEX")
 });
 /// DetObjPose response
