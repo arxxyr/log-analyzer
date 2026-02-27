@@ -541,6 +541,36 @@ fn extract_round_time_ranges(timeline: &timeline::Timeline) -> Vec<RoundTimeRang
     ranges
 }
 
+/// 在指定输出目录生成单文件的汇总甘特图 auto_merged_gantt.png
+fn generate_auto_gantt(
+    result: &AnalyzeResult,
+    output_dir: &Path,
+    config: &AnalyzerConfig,
+) -> Result<()> {
+    let output_path = output_dir.join("auto_merged_gantt.png");
+
+    let merge_config = MergeConfig {
+        primary_source: config.multi_file.alignment.primary_source.clone(),
+        time_tolerance: config.multi_file.alignment.time_tolerance,
+        alignment_strategy: AlignmentStrategy::Timestamp,
+        track_priority: config.multi_file.track_priority.clone(),
+    };
+
+    let merged = TimelineMerger::new(merge_config).merge(vec![result.timeline.clone()])?;
+
+    let generator = GanttChartGenerator::new(create_visualization_config(config));
+    generator.generate_gantt_chart(
+        &merged,
+        output_path
+            .to_str()
+            .context(t!("err.invalid_path").to_string())?,
+        t!("msg.multi_analysis_complete").as_ref(),
+    )?;
+
+    info!("已生成: {}", output_path.display());
+    Ok(())
+}
+
 /// 检测是否存在同 pattern 的多个 task（批量模式）
 fn has_batch_tasks(tasks: &[AnalysisTask]) -> bool {
     let mut pattern_counts = std::collections::HashMap::new();
@@ -617,6 +647,13 @@ fn run_multi_file_analysis(
             context = Some(AnalyzerContext {
                 round_time_ranges: ranges,
             });
+        }
+
+        // 批量模式：在各自子目录生成汇总甘特图
+        if is_batch {
+            if let Err(e) = generate_auto_gantt(&result, &output_dir, config) {
+                warn!("auto_merged_gantt.png 生成失败（非致命）: {}", e);
+            }
         }
 
         results.push(result);
