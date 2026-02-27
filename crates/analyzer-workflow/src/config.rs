@@ -330,9 +330,17 @@ pub struct AnalyzerMapping {
     #[serde(default)]
     pub use_latest_date_dir: bool,
 
+    /// 每个模式最多拉取和分析的文件数量（默认 1，表示只分析最新的 1 个）
+    #[serde(default = "default_max_files")]
+    pub max_files: usize,
+
     /// 插件特定配置
     #[serde(default)]
     pub config: Option<serde_json::Value>,
+}
+
+fn default_max_files() -> usize {
+    1
 }
 
 fn default_enabled() -> bool {
@@ -608,6 +616,7 @@ impl Default for AnalyzerConfig {
                 priority: 0,
                 remote_log_dir: None,
                 use_latest_date_dir: false,
+                max_files: 1,
                 config: None,
             }],
             multi_file: MultiFileConfig::default(),
@@ -629,7 +638,7 @@ impl AnalyzerConfig {
 
         let content = fs::read_to_string(path)?;
 
-        let config: AnalyzerConfig = serde_yaml::from_str(&content)
+        let config: AnalyzerConfig = serde_yaml_ng::from_str(&content)
             .map_err(|e| ConfigError::ParseError(format!("YAML 解析失败: {}", e)))?;
 
         config.validate()?;
@@ -638,7 +647,7 @@ impl AnalyzerConfig {
 
     /// 保存配置到文件
     pub fn save_to_file<P: AsRef<Path>>(&self, path: P) -> Result<()> {
-        let content = serde_yaml::to_string(self)
+        let content = serde_yaml_ng::to_string(self)
             .map_err(|e| ConfigError::ParseError(format!("YAML 序列化失败: {}", e)))?;
 
         fs::write(path, content)?;

@@ -10,6 +10,10 @@
 //! - 事件排序和去重
 //! - 父子事件关系保持
 
+// i18n 初始化
+rust_i18n::i18n!("locales", fallback = "zh-CN");
+use rust_i18n::t;
+
 use analyzer_core::timeline::*;
 use anyhow::{Context, Result};
 use std::collections::HashMap;
@@ -101,7 +105,7 @@ impl TimelineMerger {
     /// - 如果时间线列表为空
     pub fn merge(&self, timelines: Vec<Timeline>) -> Result<MergedTimeline> {
         if timelines.is_empty() {
-            anyhow::bail!("时间线列表为空");
+            anyhow::bail!("{}", t!("err.empty_timeline"));
         }
 
         // 1. 查找主时间线
@@ -113,7 +117,7 @@ impl TimelineMerger {
                     .iter()
                     .find(|t| t.name.as_str() == self.config.primary_source)
             })
-            .context("未找到主时间线")?
+            .context(t!("err.no_primary").to_string())?
             .clone();
 
         tracing::info!(
@@ -156,7 +160,7 @@ impl TimelineMerger {
         let min_time = all_events
             .iter()
             .map(|e| e.start_time)
-            .min_by(|a, b| a.partial_cmp(b).unwrap())
+            .min_by(|a, b| a.total_cmp(b))
             .unwrap_or(primary_timeline.log_start_time);
 
         let max_time = all_events
@@ -165,7 +169,7 @@ impl TimelineMerger {
                 RSome(t) => Some(*t),
                 _ => None,
             })
-            .max_by(|a, b| a.partial_cmp(b).unwrap())
+            .max_by(|a, b| a.total_cmp(b))
             .unwrap_or(primary_timeline.log_end_time);
 
         // 6. 统计信息

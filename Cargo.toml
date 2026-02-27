@@ -12,7 +12,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.4.0"
+version = "0.5.0"
 edition = "2024"
 authors = ["loosqk"]
 license = "Apache-2.0"
@@ -26,7 +26,7 @@ anyhow = "1.0"
 thiserror = "2.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-serde_yaml = "0.9.34-deprecated"
+serde_yaml_ng = "0.10"
 
 # CLI 相关
 clap = { version = "4.5.53", features = ["derive"] }
@@ -46,10 +46,6 @@ glob = "0.3"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
-# 异步运行时
-tokio = { version = "1.42", features = ["full"] }
-tokio-util = "0.7"
-
 # SSH 和远程连接
 ssh2 = "0.9"
 
@@ -66,10 +62,12 @@ cxx-build = "1.0"
 
 # 测试依赖
 tempfile = "3.8"
-tokio-test = "0.4"
 
 # 内存分配器
 mimalloc = "0.1"
+
+# 国际化
+rust-i18n = "3"
 
 [profile.release]
 opt-level = 3          # 性能优先

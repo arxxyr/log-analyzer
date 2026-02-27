@@ -10,10 +10,101 @@
 //! - 最终循环开始: `[最终循环] 最终循环：取出气密工件并放置`
 //! - 最终循环完成: `[最终循环] 最终循环完成`
 
+use std::sync::LazyLock;
+
 use anyhow::Result;
 use regex::Regex;
 
 use crate::models::{CycleType, LogLine, PauseEvent, Round};
+
+// ===== 循环检测正则 =====
+
+/// 初始循环开始: [初始循环] ===== 初始循环开始（气密设备为空）=====
+static INIT_START_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\[初始循环\]\s*=+\s*初始循环开始（气密设备为空）\s*=+")
+        .expect("invalid regex: INIT_START_REGEX")
+});
+
+/// 初始循环完成: [初始循环] 初始循环完成，气密设备中有工件
+static INIT_END_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\[初始循环\]\s*初始循环完成，气密设备中有工件")
+        .expect("invalid regex: INIT_END_REGEX")
+});
+
+/// 常规循环开始: [常规循环] 常规循环 N
+static NORMAL_START_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\[常规循环\]\s*常规循环\s*(\d+)\s*$").expect("invalid regex: NORMAL_START_REGEX")
+});
+
+/// 常规循环完成: [常规循环] 常规循环 N 放置完成
+static NORMAL_END_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\[常规循环\]\s*常规循环\s*(\d+)\s*放置完成")
+        .expect("invalid regex: NORMAL_END_REGEX")
+});
+
+/// 最终循环开始: [最终循环] 最终循环：取出气密工件并放置
+static FINAL_START_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\[最终循环\]\s*最终循环：取出气密工件并放置")
+        .expect("invalid regex: FINAL_START_REGEX")
+});
+
+/// 最终循环完成: [最终循环] 最终循环完成
+static FINAL_END_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\[最终循环\]\s*最终循环完成").expect("invalid regex: FINAL_END_REGEX")
+});
+
+// ===== 姿态信息正则 =====
+
+/// 姿态字符串: [master_control]: 姿态字符串: {...}
+static POSE_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\[master_control\]:\s*姿态字符串:\s*(\{.*\})").expect("invalid regex: POSE_REGEX")
+});
+
+// ===== 暂停/恢复检测正则 =====
+
+/// 暂停检测模式 1: PauseTaskNode[...]: 请求暂停任务，等待操作员 RESUME
+static PAUSE_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"PauseTaskNode\[.*?\]:\s*请求暂停任务，等待操作员 RESUME")
+        .expect("invalid regex: PAUSE_REGEX")
+});
+
+/// 恢复检测模式 1: PauseTaskNode[...]: 任务已恢复，继续执行
+static RESUME_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"PauseTaskNode\[.*?\]:\s*任务已恢复，继续执行")
+        .expect("invalid regex: RESUME_REGEX")
+});
+
+/// 暂停检测模式 2: TaskGraphExecutor: 节点 ... 失败，进入失败暂停状态
+static FAIL_PAUSE_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"TaskGraphExecutor:\s*节点\s+\S+\s+失败，进入失败暂停状态")
+        .expect("invalid regex: FAIL_PAUSE_REGEX")
+});
+
+/// 恢复检测模式 2: TaskGraphExecutor: 重试节点 ...
+static RETRY_RESUME_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"TaskGraphExecutor:\s*重试节点\s+\S+").expect("invalid regex: RETRY_RESUME_REGEX")
+});
+
+/// 暂停检测模式 3: ROS2ActionAdapter[xxx] - 暂停（动作被暂停）
+static ADAPTER_PAUSE_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"ROS2ActionAdapter\[\w+\]\s*-\s*暂停").expect("invalid regex: ADAPTER_PAUSE_REGEX")
+});
+
+/// 恢复检测模式 3: ROS2ActionAdapter[xxx] - 恢复（动作恢复执行）
+static ADAPTER_RESUME_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"ROS2ActionAdapter\[\w+\]\s*-\s*恢复").expect("invalid regex: ADAPTER_RESUME_REGEX")
+});
+
+/// 暂停检测模式 4: TaskGraphExecutor: 用户请求暂停任务 xxx
+static USER_PAUSE_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"TaskGraphExecutor:\s*用户请求暂停任务\s+\S+")
+        .expect("invalid regex: USER_PAUSE_REGEX")
+});
+
+/// 恢复检测模式 4: TaskGraphExecutor: 恢复任务 xxx
+static USER_RESUME_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"TaskGraphExecutor:\s*恢复任务\s+\S+").expect("invalid regex: USER_RESUME_REGEX")
+});
 
 /// 结束当前轮次并推入列表
 fn finalize_current_round(current: &mut Option<Round>, rounds: &mut Vec<Round>, end_ts: f64) {
@@ -54,41 +145,22 @@ fn create_round(rounds: &[Round], cycle_type: CycleType, loop_number: u32, start
 /// # 返回
 /// 包含所有检测到的轮次的向量
 pub fn detect_rounds(lines: &[LogLine], t_last: f64) -> Result<Vec<Round>> {
-    // 初始循环开始: [初始循环] ===== 初始循环开始（气密设备为空）=====
-    let init_start_regex = Regex::new(r"\[初始循环\]\s*=+\s*初始循环开始（气密设备为空）\s*=+")?;
-    // 初始循环完成: [初始循环] 初始循环完成，气密设备中有工件
-    let init_end_regex = Regex::new(r"\[初始循环\]\s*初始循环完成，气密设备中有工件")?;
-    // 常规循环开始: [常规循环] 常规循环 N
-    let normal_start_regex = Regex::new(r"\[常规循环\]\s*常规循环\s*(\d+)\s*$")?;
-    // 常规循环完成: [常规循环] 常规循环 N 放置完成
-    let normal_end_regex = Regex::new(r"\[常规循环\]\s*常规循环\s*(\d+)\s*放置完成")?;
-    // 最终循环开始: [最终循环] 最终循环：取出气密工件并放置
-    let final_start_regex = Regex::new(r"\[最终循环\]\s*最终循环：取出气密工件并放置")?;
-    // 最终循环完成: [最终循环] 最终循环完成
-    let final_end_regex = Regex::new(r"\[最终循环\]\s*最终循环完成")?;
-
-    // 姿态信息
-    let pose_regex = Regex::new(r"\[master_control\]:\s*姿态字符串:\s*(\{.*\})")?;
-
-    // 暂停检测模式 1: PauseTaskNode[...]: 请求暂停任务，等待操作员 RESUME
-    let pause_regex = Regex::new(r"PauseTaskNode\[.*?\]:\s*请求暂停任务，等待操作员 RESUME")?;
-    // 恢复检测模式 1: PauseTaskNode[...]: 任务已恢复，继续执行
-    let resume_regex = Regex::new(r"PauseTaskNode\[.*?\]:\s*任务已恢复，继续执行")?;
-
-    // 暂停检测模式 2: TaskGraphExecutor: 节点 ... 失败，进入失败暂停状态
-    let fail_pause_regex = Regex::new(r"TaskGraphExecutor:\s*节点\s+\S+\s+失败，进入失败暂停状态")?;
-    // 恢复检测模式 2: TaskGraphExecutor: 重试节点 ...
-    let retry_resume_regex = Regex::new(r"TaskGraphExecutor:\s*重试节点\s+\S+")?;
-
-    // 暂停检测模式 3: ROS2ActionAdapter[xxx] - 暂停（动作被暂停）
-    let adapter_pause_regex = Regex::new(r"ROS2ActionAdapter\[\w+\]\s*-\s*暂停")?;
-    // 恢复检测模式 3: ROS2ActionAdapter[xxx] - 恢复（动作恢复执行）
-    let adapter_resume_regex = Regex::new(r"ROS2ActionAdapter\[\w+\]\s*-\s*恢复")?;
-
-    // 暂停检测模式 4: TaskGraphExecutor: 用户请求暂停任务 xxx
-    let user_pause_regex = Regex::new(r"TaskGraphExecutor:\s*用户请求暂停任务\s+\S+")?;
-    // 恢复检测模式 4: TaskGraphExecutor: 恢复任务 xxx
-    let user_resume_regex = Regex::new(r"TaskGraphExecutor:\s*恢复任务\s+\S+")?;
+    // 引用静态预编译正则
+    let init_start_regex = &*INIT_START_REGEX;
+    let init_end_regex = &*INIT_END_REGEX;
+    let normal_start_regex = &*NORMAL_START_REGEX;
+    let normal_end_regex = &*NORMAL_END_REGEX;
+    let final_start_regex = &*FINAL_START_REGEX;
+    let final_end_regex = &*FINAL_END_REGEX;
+    let pose_regex = &*POSE_REGEX;
+    let pause_regex = &*PAUSE_REGEX;
+    let resume_regex = &*RESUME_REGEX;
+    let fail_pause_regex = &*FAIL_PAUSE_REGEX;
+    let retry_resume_regex = &*RETRY_RESUME_REGEX;
+    let adapter_pause_regex = &*ADAPTER_PAUSE_REGEX;
+    let adapter_resume_regex = &*ADAPTER_RESUME_REGEX;
+    let user_pause_regex = &*USER_PAUSE_REGEX;
+    let user_resume_regex = &*USER_RESUME_REGEX;
 
     let mut rounds = Vec::new();
     let mut current: Option<Round> = None;

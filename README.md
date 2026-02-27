@@ -1,4 +1,4 @@
-# Analyzer - 通用日志分析器框架 (v0.3.3)
+# Analyzer - 通用日志分析器框架 (v0.4.0)
 
 基于插件架构的日志分析工具，使用 Rust + abi_stable 实现 ABI 稳定的插件系统，支持远程日志获取和自动化工作流。
 
@@ -10,9 +10,10 @@
 - **配置驱动** - 基于 YAML 配置的工作流编排
 - **自动化工作流** - 一键完成发现、下载、分析全流程
 - **智能插件选择** - 根据文件模式自动选择合适的分析器
+- **国际化 (i18n)** - 支持中文/英文切换（`--lang en`）
+- **系统字体检测** - 自动检测系统 CJK 字体，无需捆绑字体文件
 - **高性能** - Rust 实现，使用 mimalloc 内存分配器
 - **可扩展** - 轻松开发新的分析器插件
-- **TUI 界面** - 可选的交互式终端界面（使用 `--tui` 启用）
 
 ## 快速开始
 
@@ -62,20 +63,7 @@ analyzers:
 ./analyzer auto
 ```
 
-#### 2. TUI 交互模式（可选）
-
-```bash
-# 启用 TUI 界面
-./analyzer --tui
-```
-
-**TUI 快捷键：**
-- `q` 或 `ESC` - 退出
-- `p` 或 `空格` - 暂停/恢复
-- `↑/↓` - 滚动日志
-- `Tab` - 切换焦点（主区域 ⟷ 插件面板）
-
-#### 3. 列出远程日志
+#### 2. 列出远程日志
 
 ```bash
 # 列出所有日志文件
@@ -85,7 +73,7 @@ analyzers:
 ./analyzer list-remote "master_control_*.log"
 ```
 
-#### 4. 分析本地文件
+#### 3. 分析本地文件
 
 ```bash
 # 自动选择插件
@@ -98,16 +86,29 @@ analyzers:
 ./analyzer analyze -i logs/your.log -o ./my_output
 ```
 
-#### 5. 从远程下载并分析
+#### 4. 从远程下载并分析
 
 ```bash
 ./analyzer analyze -i your.log --remote
 ```
 
-#### 6. 仅下载文件
+#### 5. 仅下载文件
 
 ```bash
 ./analyzer download your.log
+```
+
+#### 6. 语言切换
+
+```bash
+# 使用英文界面
+./analyzer --lang en
+
+# 使用中文界面（默认）
+./analyzer --lang zh-CN
+
+# 通过环境变量设置
+LANG=en_US.UTF-8 ./analyzer
 ```
 
 #### 7. 其他命令
@@ -138,13 +139,13 @@ analyzer/
 │   ├── analyzer-cli/             # CLI 主程序（插件加载器）
 │   ├── analyzer-remote/          # 远程连接模块（SSH/SCP）
 │   ├── analyzer-workflow/        # 工作流编排模块
-│   ├── analyzer-tui/             # TUI 界面模块（可选）
 │   ├── analyzer-merger/          # 时间线合并模块
 │   ├── analyzer-visualizer/      # 可视化模块
 │   └── plugins/                  # 分析器插件
 │       └── master-control-analyzer/  # 机器人控制系统日志分析器
-├── fonts/
-│   └── *.ttf                     # 中文字体（甘特图用）
+├── scripts/
+│   ├── deploy.sh                 # Linux/macOS 部署脚本
+│   └── deploy-windows.ps1        # Windows 部署脚本
 └── docs/
     ├── PLUGIN_ARCHITECTURE.md    # 插件开发文档
     └── WORKFLOW_ARCHITECTURE.md  # 工作流架构文档
@@ -240,10 +241,11 @@ cargo test --all
 - `ssh2 = "0.9"` - SSH 连接
 - `serde_yaml = "0.9"` - YAML 配置
 - `tracing` - 结构化日志
+- `rust-i18n = "3"` - 国际化
 
 ### 插件依赖
 
-- `plotters` - 图表生成
+- `plotters` - 图表生成（`ab_glyph` 后端）
 - `csv` - 数据导出
 - `regex` - 模式匹配
 
@@ -254,6 +256,25 @@ cargo test --all
 1. 检查插件文件扩展名（Linux: `.so`, macOS: `.dylib`, Windows: `.dll`）
 2. 确保 `abi_stable` 版本一致
 3. 检查插件目录路径
+
+### 甘特图中文乱码或无法生成
+
+程序启动时会自动检测系统 CJK 字体。如果缺少字体，CSV 分析结果不受影响，仅甘特图无法生成。
+
+```bash
+# 安装 CJK 字体
+# Ubuntu/Debian
+sudo apt install fonts-noto-cjk
+
+# Fedora/RHEL
+sudo dnf install google-noto-sans-cjk-fonts
+
+# Arch Linux
+sudo pacman -S noto-fonts-cjk
+
+# Alpine
+apk add font-noto-cjk
+```
 
 ### SSH 连接失败
 
@@ -274,11 +295,19 @@ MIT OR Apache-2.0
 
 ## 更新日志
 
-### v0.3.3 (当前版本)
+### v0.4.0 (当前版本)
+
+- 国际化 (i18n)：支持中文/英文界面切换（`--lang en`）
+- 系统字体检测：通过 `fc-match` + `register_font` 自动注册系统字体
+- 移除捆绑字体文件，改用系统 CJK 字体
+- 部署脚本简化：不再复制字体目录
+- 移除 TUI 模块
+
+### v0.3.3
 
 - CI/CD 优化：使用 Swatinem/rust-cache 加速构建
 - 移除 macOS x64 构建，只保留 ARM64
-- 语义化版本：Release 使用 `v0.3.3+commit`，Dev 使用 `v0.3.3+date.commit`
+- 语义化版本支持
 
 ### v0.3.2
 

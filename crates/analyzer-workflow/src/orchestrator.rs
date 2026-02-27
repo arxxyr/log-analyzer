@@ -254,7 +254,14 @@ impl WorkflowOrchestrator {
             });
 
             // 查找对应的分析器配置，提取需要的值（避免借用冲突）
-            let (is_enabled, is_required, is_primary, remote_log_dir, use_latest_date_dir) = {
+            let (
+                is_enabled,
+                is_required,
+                is_primary,
+                remote_log_dir,
+                use_latest_date_dir,
+                max_files,
+            ) = {
                 let analyzer_config = self.config.analyzers.iter().find(|a| a.pattern == *pattern);
                 match analyzer_config {
                     Some(ac) => (
@@ -263,8 +270,9 @@ impl WorkflowOrchestrator {
                         ac.is_primary,
                         ac.remote_log_dir.clone(),
                         ac.use_latest_date_dir,
+                        ac.max_files,
                     ),
-                    None => (true, false, false, None, false), // 未配置的模式默认启用、非必需、非主时间轴
+                    None => (true, false, false, None, false, 1),
                 }
             };
 
@@ -278,21 +286,37 @@ impl WorkflowOrchestrator {
             let effective_log_dir =
                 self.resolve_log_dir_for_analyzer(remote_log_dir.as_ref(), use_latest_date_dir)?;
 
-            // 发现文件
-            let file_info_result = if self.config.remote.enabled
+            // 发现文件：根据 max_files 决定获取单个还是多个
+            let file_infos = if self.config.remote.enabled
                 && let Some(connection) = self.remote_connection.as_mut()
             {
-                self.discoverer
-                    .discover_and_select_remote(connection, &effective_log_dir, pattern)
+                if max_files > 1 {
+                    self.discoverer.discover_and_select_top_n_remote(
+                        connection,
+                        &effective_log_dir,
+                        pattern,
+                        max_files,
+                    )
+                } else {
+                    self.discoverer
+                        .discover_and_select_remote(connection, &effective_log_dir, pattern)
+                        .map(|f| vec![f])
+                }
+            } else if max_files > 1 {
+                self.discoverer.discover_and_select_top_n_local(
+                    &self.config.local.log_dir,
+                    pattern,
+                    max_files,
+                )
             } else {
                 self.discoverer
                     .discover_and_select_local(&self.config.local.log_dir, pattern)
+                    .map(|f| vec![f])
             };
 
-            let file_info = match file_info_result {
-                Ok(f) => f,
+            let file_infos = match file_infos {
+                Ok(files) => files,
                 Err(e) => {
-                    // 非必需文件找不到只是警告
                     if is_required {
                         result.add_error(format!("必需文件未找到 ({}): {}", pattern, e));
                         return Ok(result);
@@ -303,53 +327,57 @@ impl WorkflowOrchestrator {
                 }
             };
 
-            info!("找到文件: {} (模式: {})", file_info.name, pattern);
+            info!("找到 {} 个文件 (模式: {})", file_infos.len(), pattern);
 
-            // 3. 下载文件（如果是远程）
-            let local_file = if file_info.is_remote {
-                match self.download_file(&file_info, &mut result) {
-                    Ok(f) => f,
-                    Err(e) => {
-                        if is_required {
-                            result.add_error(format!("必需文件下载失败 ({}): {}", pattern, e));
-                            return Ok(result);
-                        } else {
-                            warn!("可选文件下载失败 ({}): {}", pattern, e);
-                            continue;
+            // 3. 为每个文件下载并创建分析任务
+            for file_info in &file_infos {
+                let local_file = if file_info.is_remote {
+                    match self.download_file(file_info, &mut result) {
+                        Ok(f) => f,
+                        Err(e) => {
+                            if is_required {
+                                result.add_error(format!(
+                                    "必需文件下载失败 ({}/{}): {}",
+                                    pattern, file_info.name, e
+                                ));
+                                return Ok(result);
+                            } else {
+                                warn!("可选文件下载失败 ({}/{}): {}", pattern, file_info.name, e);
+                                continue;
+                            }
                         }
                     }
-                }
-            } else {
-                file_info.path.clone()
-            };
+                } else {
+                    file_info.path.clone()
+                };
 
-            // 4. 选择插件
-            let plugin_mapping = match self.selector.select_plugin(&file_info.name) {
-                Some(m) => m,
-                None => {
-                    warn!("未找到匹配插件: {}", file_info.name);
-                    continue;
-                }
-            };
+                // 4. 选择插件
+                let plugin_mapping = match self.selector.select_plugin(&file_info.name) {
+                    Some(m) => m,
+                    None => {
+                        warn!("未找到匹配插件: {}", file_info.name);
+                        continue;
+                    }
+                };
 
-            // 添加分析任务
-            let task = AnalysisTask {
-                local_file: local_file.clone(),
-                file_name: file_info.name.clone(),
-                pattern: pattern.clone(),
-                plugin_name: plugin_mapping.plugin.clone(),
-                is_primary,
-            };
+                let task = AnalysisTask {
+                    local_file: local_file.clone(),
+                    file_name: file_info.name.clone(),
+                    pattern: pattern.clone(),
+                    plugin_name: plugin_mapping.plugin.clone(),
+                    is_primary,
+                };
 
-            info!(
-                "添加分析任务: {} -> {} (主时间轴: {})",
-                file_info.name, plugin_mapping.plugin, is_primary
-            );
-            result.analysis_tasks.push(task);
+                info!(
+                    "添加分析任务: {} -> {} (主时间轴: {})",
+                    file_info.name, plugin_mapping.plugin, is_primary
+                );
+                result.analysis_tasks.push(task);
 
-            result.add_step(WorkflowStep::SelectPlugin {
-                file_name: file_info.name.clone(),
-            });
+                result.add_step(WorkflowStep::SelectPlugin {
+                    file_name: file_info.name.clone(),
+                });
+            }
         }
 
         // 5. 检查是否有任务
@@ -573,7 +601,11 @@ impl WorkflowOrchestrator {
         let local_path = self.config.local.log_dir.join(&file_info.name);
 
         // 检查本地文件是否存在且相同（通过 mtime 和 size 判断）
-        if local_path.exists()
+        // 仅当远程元数据有效（size > 0 且 mtime > 0）时才使用缓存，
+        // 否则始终重新下载（防止 stat 解析失败导致误判）
+        if file_info.size > 0
+            && file_info.mtime > 0
+            && local_path.exists()
             && let Ok(metadata) = fs::metadata(&local_path)
         {
             let local_size = metadata.len();
@@ -584,7 +616,6 @@ impl WorkflowOrchestrator {
                 .map(|d| d.as_secs())
                 .unwrap_or(0);
 
-            // 比较文件大小和修改时间
             if file_info.size == local_size && file_info.mtime == local_mtime {
                 info!("本地文件已存在且与远程相同，跳过下载: {:?}", local_path);
                 return Ok(local_path);

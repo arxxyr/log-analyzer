@@ -8,6 +8,7 @@ use anyhow::Result;
 use csv;
 use plotters::prelude::*;
 use plotters::style::text_anchor::{HPos, Pos, VPos};
+use rust_i18n::t;
 
 use crate::font_loader::FontLoader;
 use crate::models::{NavigationFlow, PauseEvent, Round, SubStep};
@@ -61,6 +62,24 @@ fn get_action_color(action_type: &str) -> RGBColor {
         }
     }
     RGBColor(192, 192, 192) // 灰色（默认）
+}
+
+/// 获取动作类型的本地化显示名称
+fn get_action_type_display(action_type: &str) -> String {
+    match action_type {
+        "navigation" | "nav" => t!("action.navigation").to_string(),
+        "preplan" => t!("action.preplan").to_string(),
+        "arm" => t!("action.arm").to_string(),
+        "head" => t!("action.head").to_string(),
+        "waist" => t!("action.waist").to_string(),
+        "ready_pose" => t!("action.ready_pose").to_string(),
+        "det_obj_pose" => t!("action.det_obj_pose").to_string(),
+        "obstacle" => t!("action.obstacle").to_string(),
+        "transition" => t!("action.transition").to_string(),
+        "arm_move" => t!("action.arm_move").to_string(),
+        "gripper" => t!("action.gripper").to_string(),
+        _ => action_type.to_string(),
+    }
 }
 
 /// 子步骤颜色配置
@@ -314,8 +333,8 @@ fn generate_round_gantt(
 
             let label = format!("F{}-nav", flow_id);
             let detail_info = match flow.nav_target_pos.as_deref() {
-                Some(pos) => format!("导航→{}", pos),
-                None => "导航".to_string(),
+                Some(pos) => t!("label.navigation_to", pos = pos).to_string(),
+                None => t!("action.navigation").to_string(),
             };
 
             chart_data.push((
@@ -354,22 +373,32 @@ fn generate_round_gantt(
                     "arm" => {
                         let action_code = operation.action_code.unwrap_or(0);
                         let status_suffix = if operation.end_ts.is_none() {
-                            "[未完成]"
+                            t!("label.not_completed").to_string()
                         } else {
-                            ""
+                            String::new()
                         };
                         (
                             format!("F{}-arm-{}", flow_id, action_code),
-                            format!("手臂:{}{}", action_code, status_suffix),
+                            format!(
+                                "{}{}",
+                                t!("label.arm_action", code = action_code),
+                                status_suffix
+                            ),
                         )
                     }
-                    "head" => (format!("F{}-head", flow_id), "头部控制".to_string()),
-                    "waist" => (format!("F{}-waist", flow_id), "腰部控制".to_string()),
+                    "head" => (
+                        format!("F{}-head", flow_id),
+                        t!("label.head_control").to_string(),
+                    ),
+                    "waist" => (
+                        format!("F{}-waist", flow_id),
+                        t!("label.waist_control").to_string(),
+                    ),
                     "preplan" => {
                         let action_code = operation.action_code.unwrap_or(0);
                         (
                             format!("F{}-preplan-{}", flow_id, action_code),
-                            format!("预打舵(action={})", action_code),
+                            t!("label.preplan_action", code = action_code).to_string(),
                         )
                     }
                     _ => (
@@ -395,7 +424,7 @@ fn generate_round_gantt(
     }
 
     // 按开始时间排序chart_data，确保layer分配算法正确工作
-    chart_data.sort_by(|a, b| a.2.partial_cmp(&b.2).unwrap());
+    chart_data.sort_by(|a, b| a.2.total_cmp(&b.2));
 
     // 去重：移除完全相同的条目（基于label、start、duration、type）
     chart_data.dedup_by(|a, b| {
@@ -418,11 +447,16 @@ fn generate_round_gantt(
     }
 
     // 使用配置表收集所有出现的动作类型并分配Y轴位置
-    for (type_key, type_name, _) in ACTION_TYPE_CONFIG {
+    for (type_key, _, _) in ACTION_TYPE_CONFIG {
         if chart_data.iter().any(|(_, _, _, _, t, _)| t == type_key) {
             action_type_map.insert(type_key.to_string(), action_types.len());
             let total_duration = action_type_durations.get(*type_key).unwrap_or(&0.0);
-            action_types.push(format!("{} (总计: {:.1}s)", type_name, total_duration));
+            let display_name = get_action_type_display(type_key);
+            action_types.push(format!(
+                "{} ({})",
+                display_name,
+                t!("gantt.total_time", time = format!("{:.1}", total_duration))
+            ));
         }
     }
 
@@ -431,7 +465,12 @@ fn generate_round_gantt(
         if !action_type_map.contains_key(action_type) {
             action_type_map.insert(action_type.clone(), action_types.len());
             let total_duration = action_type_durations.get(action_type).unwrap_or(&0.0);
-            action_types.push(format!("{} (总计: {:.1}s)", action_type, total_duration));
+            let display_name = get_action_type_display(action_type);
+            action_types.push(format!(
+                "{} ({})",
+                display_name,
+                t!("gantt.total_time", time = format!("{:.1}", total_duration))
+            ));
         }
     }
 
@@ -463,29 +502,41 @@ fn generate_round_gantt(
             // 格式: "2026-01-13 17:35:02.438866" -> "17:35:02.438866"
             full.split_whitespace().nth(1).unwrap_or(&full).to_string()
         })
-        .unwrap_or_else(|| "未结束".to_string());
+        .unwrap_or_else(|| t!("gantt.not_ended").to_string());
 
     // 构建标题，包含循环类型（去掉层级信息）
     // 如果有暂停时间，显示有效时间和暂停时间
     let title = if pause_duration > 0.0 {
         format!(
-            "{} (Round {}) Timeline (有效: {:.3}s, 暂停: {:.3}s, 总计: {:.3}s)\n北京时间: {} - {}",
-            round.cycle_type,
-            round.id,
-            effective_duration,
-            pause_duration,
-            total_duration,
-            round_start_beijing,
-            round_end_beijing_short
+            "{}\n{}",
+            t!(
+                "gantt.title_with_pause",
+                cycle_type = round.cycle_type.to_string(),
+                id = round.id,
+                effective = format!("{:.3}", effective_duration),
+                pause = format!("{:.3}", pause_duration),
+                total = format!("{:.3}", total_duration)
+            ),
+            t!(
+                "gantt.beijing_time",
+                start = &round_start_beijing,
+                end = &round_end_beijing_short
+            )
         )
     } else {
         format!(
-            "{} (Round {}) Timeline (Total: {:.3}s)\n北京时间: {} - {}",
-            round.cycle_type,
-            round.id,
-            total_duration,
-            round_start_beijing,
-            round_end_beijing_short
+            "{}\n{}",
+            t!(
+                "gantt.title_no_pause",
+                cycle_type = round.cycle_type.to_string(),
+                id = round.id,
+                total = format!("{:.3}", total_duration)
+            ),
+            t!(
+                "gantt.beijing_time",
+                start = &round_start_beijing,
+                end = &round_end_beijing_short
+            )
         )
     };
 
@@ -498,8 +549,8 @@ fn generate_round_gantt(
 
     // 配置网格和标签（使用 FontLoader 确保中文显示正常）
     let mut mesh = chart.configure_mesh();
-    mesh.y_desc("动作类型")
-        .x_desc("时间 (相对于轮次开始的秒数)")
+    mesh.y_desc(t!("gantt.y_label").to_string())
+        .x_desc(t!("gantt.x_label").to_string())
         .axis_desc_style(font_loader.font_desc(96))
         .label_style(font_loader.font_desc(72))
         .y_labels(action_types.len() + 1) // 确保显示所有类型标签
@@ -752,7 +803,9 @@ const ACTION_STATE_SUFFIX_MAP: &[(&str, &str)] = &[
 /// 分离名称和时间部分
 /// 例如: "ExecuteGripperMotionAction (0.51s)" -> ("ExecuteGripperMotionAction", "0.51s")
 fn split_name_and_time(full_name: &str) -> (&str, &str) {
-    if let Some(paren_pos) = full_name.rfind(" (") {
+    if let Some(paren_pos) = full_name.rfind(" (")
+        && full_name.ends_with(')')
+    {
         let time = &full_name[paren_pos + 2..full_name.len() - 1];
         let name = &full_name[..paren_pos];
         (name, time)
@@ -859,28 +912,32 @@ fn build_label_text(step_type: &str, detail_info: &str, duration: f64) -> String
 
     // 根据持续时间选择显示格式
     if duration > 20.0 {
-        format!("{}\n总计:{:.1}s", detail_info, duration)
+        format!(
+            "{}\n{}",
+            detail_info,
+            t!("gantt.total_time", time = format!("{:.1}", duration))
+        )
     } else if duration > 10.0 {
         format!("{} ({:.1}s)", detail_info, duration)
     } else if duration > 5.0 {
         let short_detail = truncate_str(detail_info, 10, 7);
         format!("{} ({:.1}s)", short_detail, duration)
     } else if duration > 2.0 {
-        let type_name = step_type_to_chinese(step_type);
+        let type_name = step_type_display(step_type);
         format!("{} ({:.1}s)", type_name, duration)
     } else {
         format!("{:.1}s", duration)
     }
 }
 
-/// 将步骤类型转换为中文名称
-fn step_type_to_chinese(step_type: &str) -> &'static str {
+/// 将步骤类型转换为本地化名称
+fn step_type_display(step_type: &str) -> String {
     match step_type {
-        "nav" | "navigation" => "导航",
-        "preplan" => "预打舵",
-        "head" => "头部",
-        "waist" => "腰部",
-        _ => "动作",
+        "nav" | "navigation" => t!("action.navigation").to_string(),
+        "preplan" => t!("action.preplan").to_string(),
+        "head" => t!("action.head").to_string(),
+        "waist" => t!("action.waist").to_string(),
+        _ => t!("action.default").to_string(),
     }
 }
 
@@ -960,7 +1017,7 @@ pub fn generate_cycle_duration_chart(
         .collect();
 
     if completed_normal_cycles.is_empty() {
-        eprintln!("[统计图] 没有已完成的常规循环，跳过生成统计图");
+        eprintln!("{}", t!("stats.no_cycles"));
         return Ok(());
     }
 
@@ -1011,15 +1068,20 @@ pub fn generate_cycle_duration_chart(
 
     // 标题：明确说明是有效耗时（扣除暂停时间）
     let title = if total_pause > 0.0 {
-        format!(
-            "常规循环有效耗时统计 (共{}个循环，平均: {:.2}s，总暂停: {:.2}s)",
-            cycle_count, avg_duration, total_pause
+        t!(
+            "stats.title_with_pause",
+            count = cycle_count,
+            avg = format!("{:.2}", avg_duration),
+            pause = format!("{:.2}", total_pause)
         )
+        .to_string()
     } else {
-        format!(
-            "常规循环耗时统计 (共{}个已完成循环，平均: {:.2}s)",
-            cycle_count, avg_duration
+        t!(
+            "stats.title_no_pause",
+            count = cycle_count,
+            avg = format!("{:.2}", avg_duration)
         )
+        .to_string()
     };
 
     // Y轴范围，留出一些余量
@@ -1045,8 +1107,8 @@ pub fn generate_cycle_duration_chart(
             }
         })
         .y_label_formatter(&|y| format!("{:.1}s", y))
-        .x_desc("循环序号")
-        .y_desc("耗时 (秒)")
+        .x_desc(t!("stats.cycle_number").to_string())
+        .y_desc(t!("stats.duration").to_string())
         .axis_desc_style(font_loader.font_desc(18).color(&BLACK))
         .label_style(font_loader.font_desc(14).color(&BLACK))
         .draw()?;
@@ -1096,7 +1158,7 @@ pub fn generate_cycle_duration_chart(
 
     // 平均线标签
     chart.draw_series(std::iter::once(Text::new(
-        format!("平均: {:.2}s", avg_duration),
+        t!("stats.average", time = format!("{:.2}", avg_duration)).to_string(),
         (cycle_count as f64 + 0.3, avg_duration),
         font_loader
             .font_desc(16)
@@ -1105,12 +1167,13 @@ pub fn generate_cycle_duration_chart(
     )))?;
 
     // 添加统计信息
-    let stats_text = format!(
-        "最大: {:.2}s  最小: {:.2}s  差值: {:.2}s",
-        max_duration,
-        min_duration,
-        max_duration - min_duration
-    );
+    let stats_text = t!(
+        "stats.max_min_diff",
+        max = format!("{:.2}", max_duration),
+        min = format!("{:.2}", min_duration),
+        diff = format!("{:.2}", max_duration - min_duration)
+    )
+    .to_string();
     root.draw(&Text::new(
         stats_text,
         (width as i32 / 2, height as i32 - 15),
@@ -1136,29 +1199,23 @@ fn generate_cycle_duration_csv(
     time_data: &[(f64, f64, f64)],
     outdir: &str,
 ) -> Result<()> {
-    use crate::models::CycleType;
-
     let csv_path = format!("{}/cycle_duration_stats.csv", outdir);
     let mut wtr = csv::Writer::from_path(&csv_path)?;
 
     // 写入表头
     wtr.write_record([
-        "序号",
-        "循环类型",
-        "轮次ID",
-        "总时间(s)",
-        "暂停时间(s)",
-        "有效时间(s)",
-        "暂停占比(%)",
+        t!("csv.seq_num").to_string(),
+        t!("csv.cycle_type").to_string(),
+        t!("csv.round_id").to_string(),
+        t!("csv.total_time").to_string(),
+        t!("csv.pause_time").to_string(),
+        t!("csv.effective_time").to_string(),
+        t!("csv.pause_ratio").to_string(),
     ])?;
 
     // 写入每个循环的数据
     for (i, (round, (total, pause, effective))) in cycles.iter().zip(time_data.iter()).enumerate() {
-        let cycle_name = match &round.cycle_type {
-            CycleType::Normal(n) => format!("常规循环 {}", n),
-            CycleType::Initial => "初始循环".to_string(),
-            CycleType::Final => "最终循环".to_string(),
-        };
+        let cycle_name = round.cycle_type.to_string();
 
         let pause_ratio = if *total > 0.0 {
             pause / total * 100.0
@@ -1189,8 +1246,8 @@ fn generate_cycle_duration_csv(
     };
 
     wtr.write_record(&[
-        "合计".to_string(),
-        format!("共{}个循环", cycles.len()),
+        t!("csv.total").to_string(),
+        t!("csv.total_cycles", count = cycles.len()).to_string(),
         "-".to_string(),
         format!("{:.3}", total_sum),
         format!("{:.3}", pause_sum),
@@ -1199,7 +1256,7 @@ fn generate_cycle_duration_csv(
     ])?;
 
     wtr.write_record(&[
-        "平均".to_string(),
+        t!("csv.average").to_string(),
         "-".to_string(),
         "-".to_string(),
         format!("{:.3}", total_sum / cycles.len() as f64),

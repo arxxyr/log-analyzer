@@ -16,6 +16,10 @@ use abi_stable::{
 use analyzer_core::*;
 use anyhow::Result;
 
+// i18n 初始化
+rust_i18n::i18n!("locales", fallback = "zh-CN");
+use rust_i18n::t;
+
 // 模块声明
 pub mod csv_exporter;
 pub mod flow_detector;
@@ -42,13 +46,19 @@ impl AnalyzerPlugin for MasterControlAnalyzer {
         PluginMetadata {
             name: "master-control-analyzer".into(),
             version: env!("CARGO_PKG_VERSION").into(),
-            description: "机器人控制系统日志分析器，支持轮次检测、流程分析和甘特图生成".into(),
+            description: t!("plugin.description").to_string().into(),
             author: "loosqk".into(),
             supported_extensions: vec![".log".into(), ".txt".into()].into(),
         }
     }
 
     fn analyze(&self, args: AnalyzeArgs) -> RResult<AnalyzeResult, RBoxError> {
+        // 设置语言（从 args 中获取）
+        let locale = args.locale.as_str();
+        if !locale.is_empty() {
+            rust_i18n::set_locale(locale);
+        }
+
         // 将 ABI 稳定类型转换为 Rust 原生类型
         let input_file = args.input_file.as_str();
         let output_dir = args.output_dir.as_str();
@@ -86,9 +96,6 @@ fn count_actions(flows: &[NavigationFlow]) -> (usize, usize, usize, usize, usize
     let mut waist_count = 0;
 
     for flow in flows {
-        if flow.nav_start_ts.is_some() {
-            nav_count += 1;
-        }
         for op in &flow.operations {
             match op.action_type.as_str() {
                 "navigation" => nav_count += 1,
@@ -117,7 +124,7 @@ fn run_analysis_internal(input_file: &str, output_dir: &str) -> Result<AnalyzeRe
     // 1. 加载日志行
     let lines = load_log_lines(input_file)?;
     if lines.is_empty() {
-        anyhow::bail!("日志文件中未找到有效的时间戳行");
+        anyhow::bail!("{}", t!("err.no_valid_timestamps"));
     }
 
     let t0 = lines[0].timestamp;
@@ -149,24 +156,30 @@ fn run_analysis_internal(input_file: &str, output_dir: &str) -> Result<AnalyzeRe
     output_files.push(OutputFile {
         path: format!("{}/analysis.csv", output_dir).into(),
         file_type: "csv".into(),
-        description: "主分析数据（所有操作的时序记录）".into(),
+        description: t!("output.analysis_csv").to_string().into(),
     });
 
-    // 生成甘特图
-    generate_gantt_charts(&flows, &rounds, output_dir, t0)?;
-    let width = utils::digit_width(rounds.len());
-    for round in &rounds {
-        output_files.push(OutputFile {
-            path: format!(
-                "{}/round_{:0width$}_gantt.png",
-                output_dir,
-                round.id,
-                width = width
-            )
-            .into(),
-            file_type: "png".into(),
-            description: format!("轮次 {} 甘特图", round.id).into(),
-        });
+    // 生成甘特图（字体不可用时跳过，不影响 CSV 结果）
+    match generate_gantt_charts(&flows, &rounds, output_dir, t0) {
+        Ok(()) => {
+            let width = utils::digit_width(rounds.len());
+            for round in &rounds {
+                output_files.push(OutputFile {
+                    path: format!(
+                        "{}/round_{:0width$}_gantt.png",
+                        output_dir,
+                        round.id,
+                        width = width
+                    )
+                    .into(),
+                    file_type: "png".into(),
+                    description: t!("output.round_gantt", id = round.id).to_string().into(),
+                });
+            }
+        }
+        Err(e) => {
+            eprintln!("[字体] 甘特图生成失败（跳过）: {}", e);
+        }
     }
 
     // 生成动作时间轴
@@ -174,37 +187,42 @@ fn run_analysis_internal(input_file: &str, output_dir: &str) -> Result<AnalyzeRe
     output_files.push(OutputFile {
         path: format!("{}/action_timeline.csv", output_dir).into(),
         file_type: "csv".into(),
-        description: "动作时间轴汇总表".into(),
+        description: t!("output.action_timeline").to_string().into(),
     });
 
-    // 生成常规循环耗时统计图（传入 flows 以获取动作级别的暂停时间）
-    gantt::generate_cycle_duration_chart(&rounds, &flows, output_dir)?;
-    output_files.push(OutputFile {
-        path: format!("{}/cycle_duration_stats.png", output_dir).into(),
-        file_type: "png".into(),
-        description: "常规循环耗时统计图".into(),
-    });
+    // 生成常规循环耗时统计图（字体不可用时跳过）
+    match gantt::generate_cycle_duration_chart(&rounds, &flows, output_dir) {
+        Ok(()) => {
+            output_files.push(OutputFile {
+                path: format!("{}/cycle_duration_stats.png", output_dir).into(),
+                file_type: "png".into(),
+                description: t!("output.cycle_duration_stats").to_string().into(),
+            });
+        }
+        Err(e) => {
+            eprintln!("[字体] 耗时统计图生成失败（跳过）: {}", e);
+        }
+    }
 
     // 8. 构建标准化时间线数据
     let timeline = build_timeline(input_file, &rounds, &flows, t0, t_last)?;
 
     // 9. 构建分析摘要
     let summary = format!(
-        "分析完成！\n\
-         - 检测到 {} 个轮次\n\
-         - 检测到 {} 个导航流程\n\
-         - 动作统计: {} 导航, {} 预打舵, {} 手臂, {} 头部, {} 腰部\n\
-         - 生成 {} 条 CSV 记录\n\
-         - 输出目录: {}",
-        round_count,
-        flow_count,
-        nav_count,
-        preplan_count,
-        arm_count,
-        head_count,
-        waist_count,
-        record_count,
-        output_dir
+        "{}\n- {}\n- {}\n- {}\n- {}\n- {}",
+        t!("summary.complete"),
+        t!("summary.rounds_detected", count = round_count),
+        t!("summary.flows_detected", count = flow_count),
+        t!(
+            "summary.action_stats",
+            nav = nav_count,
+            preplan = preplan_count,
+            arm = arm_count,
+            head = head_count,
+            waist = waist_count
+        ),
+        t!("summary.csv_records", count = record_count),
+        t!("summary.output_dir", path = output_dir)
     );
 
     Ok(AnalyzeResult {
@@ -233,7 +251,7 @@ fn build_timeline(
         let event = TimelineEvent {
             id: format!("round_{}", round.id).into(),
             track: Track::RoundMarker,
-            name: format!("轮次 {}", round.id).into(),
+            name: t!("timeline.round", id = round.id).into(),
             start_time: round.start_ts,
             end_time: round.end_ts.into(),
             status: if round.end_ts.is_some() {
@@ -270,13 +288,13 @@ fn build_timeline(
             let nav_event = TimelineEvent {
                 id: format!("nav_{}", flow_idx).into(),
                 track: Track::Navigation,
-                name: "导航".into(),
+                name: t!("action.navigation").into(),
                 start_time: nav_start,
                 end_time: RSome(nav_end),
                 status: match flow.nav_status.as_str() {
-                    "成功" => EventStatus::Success,
-                    "失败" => EventStatus::Failed,
-                    "进行中" => EventStatus::InProgress,
+                    "ok" => EventStatus::Success,
+                    s if s.starts_with("failed") => EventStatus::Failed,
+                    "incomplete" => EventStatus::InProgress,
                     _ => EventStatus::Success,
                 },
                 source: "master_control".into(),
@@ -316,10 +334,10 @@ fn build_timeline(
                     start_time: start,
                     end_time: RSome(end),
                     status: match op.status.as_str() {
-                        "成功" | "completed" => EventStatus::Success,
-                        "失败" | "failed" => EventStatus::Failed,
-                        "进行中" | "in_progress" => EventStatus::InProgress,
-                        "取消" | "cancelled" => EventStatus::Cancelled,
+                        "ok" | "completed" => EventStatus::Success,
+                        s if s.starts_with("failed") => EventStatus::Failed,
+                        "incomplete" | "in_progress" => EventStatus::InProgress,
+                        "cancelled" => EventStatus::Cancelled,
                         _ => EventStatus::Success,
                     },
                     source: "master_control".into(),
@@ -378,19 +396,8 @@ pub fn get_root_module() -> AnalyzerPluginModule_Ref {
 /// 创建插件实例的工厂函数
 #[sabi_extern_fn]
 pub fn create_plugin() -> AnalyzerPlugin_TO<'static, RBox<()>> {
-    // 初始化字体（提取嵌入的字体）
-    use crate::font_loader::FontLoader;
-    match FontLoader::new() {
-        Ok(loader) => {
-            if let Some(path) = loader.font_path() {
-                eprintln!("[master-control-analyzer] 字体已准备: {:?}", path);
-            }
-        }
-        Err(e) => {
-            eprintln!("[master-control-analyzer] 字体初始化失败: {}", e);
-        }
-    }
-
+    // 字体会在生成图表时自动检测系统字体
+    // 无需预加载嵌入字体
     AnalyzerPlugin_TO::from_value(MasterControlAnalyzer, TD_Opaque)
 }
 

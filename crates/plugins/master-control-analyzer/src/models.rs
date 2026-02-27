@@ -2,6 +2,7 @@
 //!
 //! 本模块包含日志分析工具中使用的所有核心数据结构
 
+use rust_i18n::t;
 use serde::Serialize;
 
 /// 日志行结构，包含时间戳和原始日志内容
@@ -27,9 +28,9 @@ pub enum CycleType {
 impl std::fmt::Display for CycleType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            CycleType::Initial => write!(f, "初始循环"),
-            CycleType::Normal(n) => write!(f, "常规循环 {}", n),
-            CycleType::Final => write!(f, "最终循环"),
+            CycleType::Initial => write!(f, "{}", t!("cycle.initial")),
+            CycleType::Normal(n) => write!(f, "{}", t!("cycle.normal", n = n)),
+            CycleType::Final => write!(f, "{}", t!("cycle.final")),
         }
     }
 }

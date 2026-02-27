@@ -2,6 +2,9 @@
 //!
 //! 提供 SSH 连接管理和 SCP/SFTP 文件传输功能
 
+// i18n 初始化
+rust_i18n::i18n!("locales", fallback = "zh-CN");
+
 pub mod ssh;
 pub mod transfer;
 
