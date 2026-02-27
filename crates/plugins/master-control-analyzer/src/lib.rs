@@ -96,9 +96,6 @@ fn count_actions(flows: &[NavigationFlow]) -> (usize, usize, usize, usize, usize
     let mut waist_count = 0;
 
     for flow in flows {
-        if flow.nav_start_ts.is_some() {
-            nav_count += 1;
-        }
         for op in &flow.operations {
             match op.action_type.as_str() {
                 "navigation" => nav_count += 1,
@@ -254,7 +251,7 @@ fn build_timeline(
         let event = TimelineEvent {
             id: format!("round_{}", round.id).into(),
             track: Track::RoundMarker,
-            name: format!("轮次 {}", round.id).into(),
+            name: t!("timeline.round", id = round.id).into(),
             start_time: round.start_ts,
             end_time: round.end_ts.into(),
             status: if round.end_ts.is_some() {
@@ -291,13 +288,13 @@ fn build_timeline(
             let nav_event = TimelineEvent {
                 id: format!("nav_{}", flow_idx).into(),
                 track: Track::Navigation,
-                name: "导航".into(),
+                name: t!("action.navigation").into(),
                 start_time: nav_start,
                 end_time: RSome(nav_end),
                 status: match flow.nav_status.as_str() {
-                    "成功" => EventStatus::Success,
-                    "失败" => EventStatus::Failed,
-                    "进行中" => EventStatus::InProgress,
+                    "ok" => EventStatus::Success,
+                    s if s.starts_with("failed") => EventStatus::Failed,
+                    "incomplete" => EventStatus::InProgress,
                     _ => EventStatus::Success,
                 },
                 source: "master_control".into(),
@@ -337,10 +334,10 @@ fn build_timeline(
                     start_time: start,
                     end_time: RSome(end),
                     status: match op.status.as_str() {
-                        "成功" | "completed" => EventStatus::Success,
-                        "失败" | "failed" => EventStatus::Failed,
-                        "进行中" | "in_progress" => EventStatus::InProgress,
-                        "取消" | "cancelled" => EventStatus::Cancelled,
+                        "ok" | "completed" => EventStatus::Success,
+                        s if s.starts_with("failed") => EventStatus::Failed,
+                        "incomplete" | "in_progress" => EventStatus::InProgress,
+                        "cancelled" => EventStatus::Cancelled,
                         _ => EventStatus::Success,
                     },
                     source: "master_control".into(),

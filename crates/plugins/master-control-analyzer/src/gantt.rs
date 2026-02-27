@@ -333,8 +333,8 @@ fn generate_round_gantt(
 
             let label = format!("F{}-nav", flow_id);
             let detail_info = match flow.nav_target_pos.as_deref() {
-                Some(pos) => format!("导航→{}", pos),
-                None => "导航".to_string(),
+                Some(pos) => t!("label.navigation_to", pos = pos).to_string(),
+                None => t!("action.navigation").to_string(),
             };
 
             chart_data.push((
@@ -373,22 +373,32 @@ fn generate_round_gantt(
                     "arm" => {
                         let action_code = operation.action_code.unwrap_or(0);
                         let status_suffix = if operation.end_ts.is_none() {
-                            "[未完成]"
+                            t!("label.not_completed").to_string()
                         } else {
-                            ""
+                            String::new()
                         };
                         (
                             format!("F{}-arm-{}", flow_id, action_code),
-                            format!("手臂:{}{}", action_code, status_suffix),
+                            format!(
+                                "{}{}",
+                                t!("label.arm_action", code = action_code),
+                                status_suffix
+                            ),
                         )
                     }
-                    "head" => (format!("F{}-head", flow_id), "头部控制".to_string()),
-                    "waist" => (format!("F{}-waist", flow_id), "腰部控制".to_string()),
+                    "head" => (
+                        format!("F{}-head", flow_id),
+                        t!("label.head_control").to_string(),
+                    ),
+                    "waist" => (
+                        format!("F{}-waist", flow_id),
+                        t!("label.waist_control").to_string(),
+                    ),
                     "preplan" => {
                         let action_code = operation.action_code.unwrap_or(0);
                         (
                             format!("F{}-preplan-{}", flow_id, action_code),
-                            format!("预打舵(action={})", action_code),
+                            t!("label.preplan_action", code = action_code).to_string(),
                         )
                     }
                     _ => (
@@ -414,7 +424,7 @@ fn generate_round_gantt(
     }
 
     // 按开始时间排序chart_data，确保layer分配算法正确工作
-    chart_data.sort_by(|a, b| a.2.partial_cmp(&b.2).unwrap());
+    chart_data.sort_by(|a, b| a.2.total_cmp(&b.2));
 
     // 去重：移除完全相同的条目（基于label、start、duration、type）
     chart_data.dedup_by(|a, b| {
@@ -793,7 +803,9 @@ const ACTION_STATE_SUFFIX_MAP: &[(&str, &str)] = &[
 /// 分离名称和时间部分
 /// 例如: "ExecuteGripperMotionAction (0.51s)" -> ("ExecuteGripperMotionAction", "0.51s")
 fn split_name_and_time(full_name: &str) -> (&str, &str) {
-    if let Some(paren_pos) = full_name.rfind(" (") {
+    if let Some(paren_pos) = full_name.rfind(" (")
+        && full_name.ends_with(')')
+    {
         let time = &full_name[paren_pos + 2..full_name.len() - 1];
         let name = &full_name[..paren_pos];
         (name, time)
@@ -900,7 +912,11 @@ fn build_label_text(step_type: &str, detail_info: &str, duration: f64) -> String
 
     // 根据持续时间选择显示格式
     if duration > 20.0 {
-        format!("{}\n总计:{:.1}s", detail_info, duration)
+        format!(
+            "{}\n{}",
+            detail_info,
+            t!("gantt.total_time", time = format!("{:.1}", duration))
+        )
     } else if duration > 10.0 {
         format!("{} ({:.1}s)", detail_info, duration)
     } else if duration > 5.0 {

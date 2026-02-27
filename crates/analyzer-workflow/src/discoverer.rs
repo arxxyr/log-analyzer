@@ -216,6 +216,47 @@ impl FileDiscoverer {
         }
     }
 
+    /// 选择排序后的前 N 个文件（不足 N 则返回全部）
+    pub fn select_top_n(&self, mut files: Vec<FileInfo>, n: usize) -> Vec<FileInfo> {
+        if files.is_empty() || n == 0 {
+            return Vec::new();
+        }
+        self.sort_files(&mut files);
+        files.truncate(n);
+        files
+    }
+
+    /// 发现并选择前 N 个文件（远程）
+    pub fn discover_and_select_top_n_remote(
+        &self,
+        connection: &mut SshConnection,
+        remote_dir: &str,
+        pattern: &str,
+        n: usize,
+    ) -> Result<Vec<FileInfo>> {
+        let files = self.discover_remote(connection, remote_dir, pattern)?;
+        let selected = self.select_top_n(files, n);
+        if selected.is_empty() {
+            return Err(DiscovererError::NoFilesFound);
+        }
+        Ok(selected)
+    }
+
+    /// 发现并选择前 N 个文件（本地）
+    pub fn discover_and_select_top_n_local<P: AsRef<Path>>(
+        &self,
+        dir: P,
+        pattern: &str,
+        n: usize,
+    ) -> Result<Vec<FileInfo>> {
+        let files = self.discover_local(dir, pattern)?;
+        let selected = self.select_top_n(files, n);
+        if selected.is_empty() {
+            return Err(DiscovererError::NoFilesFound);
+        }
+        Ok(selected)
+    }
+
     /// 发现并自动选择文件（本地）
     pub fn discover_and_select_local<P: AsRef<Path>>(
         &self,

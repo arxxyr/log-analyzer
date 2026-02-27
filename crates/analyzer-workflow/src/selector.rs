@@ -88,6 +88,7 @@ mod tests {
                 priority: 10,
                 remote_log_dir: None,
                 use_latest_date_dir: false,
+                max_files: 1,
                 config: None,
             },
             AnalyzerMapping {
@@ -101,6 +102,7 @@ mod tests {
                 priority: 5,
                 remote_log_dir: None,
                 use_latest_date_dir: false,
+                max_files: 1,
                 config: None,
             },
             AnalyzerMapping {
@@ -114,6 +116,7 @@ mod tests {
                 priority: -1,
                 remote_log_dir: None,
                 use_latest_date_dir: false,
+                max_files: 1,
                 config: None,
             },
         ]

@@ -134,6 +134,14 @@ action.gripper:
   zh-CN: "夹爪"
   en: "Gripper"
 
+action.arm_with_code:
+  zh-CN: "双臂(%{code})"
+  en: "Arm(%{code})"
+
+action.arm_label:
+  zh-CN: "双臂"
+  en: "Arm"
+
 action.default:
   zh-CN: "动作"
   en: "Action"
@@ -321,6 +329,92 @@ timeline_stats.head_count:
 timeline_stats.waist_count:
   zh-CN: "腰部: %{count} 个"
   en: "Waist: %{count}"
+
+# 时间线事件
+timeline.round:
+  zh-CN: "轮次 %{id}"
+  en: "Round %{id}"
+
+# 子步骤名称（甘特图子步骤显示文本）
+substep.start:
+  zh-CN: "开始"
+  en: "Start"
+
+substep.completed_ms:
+  zh-CN: "完成(%{ms}ms)"
+  en: "Done(%{ms}ms)"
+
+substep.result_code:
+  zh-CN: "结果(code=%{code})"
+  en: "Result(code=%{code})"
+
+substep.ready_pose_start:
+  zh-CN: "GetReadyPose #%{n} 开始"
+  en: "GetReadyPose #%{n} start"
+
+substep.ready_pose_done:
+  zh-CN: "GetReadyPose #%{n} 完成 (%{ms}ms)"
+  en: "GetReadyPose #%{n} done (%{ms}ms)"
+
+substep.node_start:
+  zh-CN: "节点开始"
+  en: "Node start"
+
+substep.node_end:
+  zh-CN: "节点结束(%{status})"
+  en: "Node end(%{status})"
+
+substep.pause:
+  zh-CN: "暂停"
+  en: "Pause"
+
+substep.resume:
+  zh-CN: "恢复"
+  en: "Resume"
+
+substep.exec_start:
+  zh-CN: "开始执行"
+  en: "Executing"
+
+substep.wait_server:
+  zh-CN: "等待服务器 '%{name}'..."
+  en: "Waiting for server '%{name}'..."
+
+substep.server_ready:
+  zh-CN: "服务器已就绪"
+  en: "Server ready"
+
+substep.send_goal:
+  zh-CN: "发送目标"
+  en: "Send goal"
+
+substep.executing:
+  zh-CN: "执行中"
+  en: "Running"
+
+substep.result_success:
+  zh-CN: "[RESULT] 完成，成功: %{success}"
+  en: "[RESULT] Done, success: %{success}"
+
+substep.exec_done:
+  zh-CN: "执行完成，结果: %{result}"
+  en: "Execution done, result: %{result}"
+
+substep.exec_success:
+  zh-CN: "执行成功"
+  en: "Execution success"
+
+substep.set_target:
+  zh-CN: "设置目标→%{pos}"
+  en: "Set target→%{pos}"
+
+substep.response_code:
+  zh-CN: "响应(code=%{code})"
+  en: "Response(code=%{code})"
+
+substep.preplan_label:
+  zh-CN: "预打舵[%{label}]"
+  en: "Pre-plan[%{label}]"
 
 # 错误消息
 err.no_valid_timestamps:
