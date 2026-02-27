@@ -21,6 +21,7 @@ pub enum FontChoice {
 /// 全局字体选择缓存
 static FONT_CHOICE: OnceLock<FontChoice> = OnceLock::new();
 /// 是否已显示安装提示
+#[cfg(target_os = "linux")]
 static INSTALL_HINT_SHOWN: OnceLock<bool> = OnceLock::new();
 
 /// 字体加载器
