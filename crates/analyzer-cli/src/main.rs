@@ -650,10 +650,8 @@ fn run_multi_file_analysis(
         }
 
         // 批量模式：在各自子目录生成汇总甘特图
-        if is_batch {
-            if let Err(e) = generate_auto_gantt(&result, &output_dir, config) {
-                warn!("auto_merged_gantt.png 生成失败（非致命）: {}", e);
-            }
+        if is_batch && let Err(e) = generate_auto_gantt(&result, &output_dir, config) {
+            warn!("auto_merged_gantt.png 生成失败（非致命）: {}", e);
         }
 
         results.push(result);
