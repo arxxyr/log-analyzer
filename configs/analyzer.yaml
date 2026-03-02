@@ -8,9 +8,9 @@
 # 远程连接配置
 remote:
   enabled: true
-  host: "192.168.x.x"
+  host: "192.168.5.101"
   port: 22
-  user: "your_user"
+  user: "linux"
   # 认证方式（优先级从高到低）
   auth:
     # 1. SSH 密钥（推荐）
@@ -18,10 +18,10 @@ remote:
     # 2. SSH Agent
     # use_agent: true
     # 3. 密码（不推荐，可留空由运行时输入）
-    password: "your_password"
+    password: "linux"
 
   # 日志目录配置
-  log_dir: "/home/your_user/.ros/log"
+  log_dir: "/home/linux/.ros/log"
 
   # 超时配置（秒）
   timeouts:
