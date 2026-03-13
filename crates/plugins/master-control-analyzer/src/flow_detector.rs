@@ -800,16 +800,37 @@ pub fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<Navigatio
         }
 
         // arm_move 响应 → 结束执行阶段
+        // 如果没有 planning complete 隔开，将 arm_move_plan 转为 arm_move_exec
         if arm_move_response_regex.is_match(&line.line) {
             let ts = line.timestamp;
-            update_bt_subaction(&mut active_bt_node, "arm_move_exec", |action| {
-                action.sub_steps.push(SubStep {
-                    name: "arm_move response".to_string(),
-                    timestamp: ts,
-                });
-                action.end_ts = Some(ts);
-                action.status = "ok".to_string();
+            // 先尝试关闭 arm_move_exec（有 planning complete 的正常路径）
+            let has_exec = active_bt_node.as_ref().is_some_and(|ctx| {
+                ctx.sub_actions
+                    .iter()
+                    .any(|a| a.action_type == "arm_move_exec" && a.end_ts.is_none())
             });
+            if has_exec {
+                update_bt_subaction(&mut active_bt_node, "arm_move_exec", |action| {
+                    action.sub_steps.push(SubStep {
+                        name: "arm_move response".to_string(),
+                        timestamp: ts,
+                    });
+                    action.end_ts = Some(ts);
+                    action.status = "ok".to_string();
+                });
+            } else {
+                // 没有 planning complete → 将 arm_move_plan 转为 arm_move_exec 并关闭
+                update_bt_subaction(&mut active_bt_node, "arm_move_plan", |action| {
+                    action.action_type = "arm_move_exec".to_string();
+                    action.label = action.label.replace("arm_move_plan", "arm_move_exec");
+                    action.sub_steps.push(SubStep {
+                        name: "arm_move response".to_string(),
+                        timestamp: ts,
+                    });
+                    action.end_ts = Some(ts);
+                    action.status = "ok".to_string();
+                });
+            }
             continue;
         }
 
