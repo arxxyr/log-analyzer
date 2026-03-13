@@ -601,14 +601,12 @@ fn generate_round_gantt(
                     duration: *duration,
                     sub_y_start: y_pos + 0.15,
                     sub_y_height: y_height,
-                    font_loader: &font_loader,
-                    total_time_range: max_time,
                 },
             )?;
         }
 
         // 在动作起点添加时间标注
-        draw_time_label(&mut chart, &font_loader, *start, y_pos, y_height)?;
+        draw_time_label(&mut chart, &font_loader, *start, *duration, y_pos, y_height)?;
 
         // 在主方块顶部添加主标签
         draw_main_label(
@@ -643,8 +641,6 @@ struct SubStepDrawParams<'a> {
     duration: f64,
     sub_y_start: f64,
     sub_y_height: f64,
-    font_loader: &'a FontLoader,
-    total_time_range: f64,
 }
 
 /// 绘制子步骤
@@ -666,8 +662,6 @@ where
         duration,
         sub_y_start,
         sub_y_height,
-        font_loader,
-        total_time_range,
     } = params;
     // 绘制每个子步骤之间的时间段
     for i in 0..sub_steps.len() {
@@ -709,168 +703,14 @@ where
                 BLACK.stroke_width(2),
             )))?;
 
-            // 计算子步骤在图表中的像素宽度比例
-            // 如果子步骤持续时间足够长（超过总时间范围的0.5%），绘制文字标签
-            let width_ratio = sub_duration / total_time_range;
-            if width_ratio > 0.005 {
-                // 提取简短的模块名称和时间
-                let (module_name, time_str) = extract_short_module_name(&sub_steps[i].name);
-
-                // 选择字体大小（根据宽度比例，4x 分辨率）
-                let font_size = if width_ratio > 0.05 {
-                    48
-                } else if width_ratio > 0.02 {
-                    40
-                } else {
-                    32
-                };
-
-                // 在子步骤方块中间绘制标签（分两行）
-                let text_x = sub_start_clamped + sub_duration / 2.0;
-                let text_y_upper = sub_y_start + sub_y_height * 0.35; // 上行：模块名
-                let text_y_lower = sub_y_start + sub_y_height * 0.65; // 下行：时间
-
-                // 绘制模块名称（上行）
-                chart.draw_series(std::iter::once(Text::new(
-                    module_name,
-                    (text_x, text_y_upper),
-                    font_loader
-                        .font_desc(font_size)
-                        .color(&BLACK)
-                        .pos(Pos::new(HPos::Center, VPos::Center))
-                        .transform(FontTransform::None),
-                )))?;
-
-                // 绘制时间（下行，如果有）
-                if !time_str.is_empty() {
-                    chart.draw_series(std::iter::once(Text::new(
-                        time_str,
-                        (text_x, text_y_lower),
-                        font_loader
-                            .font_desc(font_size - 8)
-                            .color(&BLACK)
-                            .pos(Pos::new(HPos::Center, VPos::Center))
-                            .transform(FontTransform::None),
-                    )))?;
-                }
-            }
+            // 子步骤图块内不绘制文字
         }
     }
 
     Ok(())
 }
 
-/// 模块名称简化映射表
-const MODULE_NAME_MAP: &[(&str, &str)] = &[
-    // 精确匹配（高优先级）
-    ("开始执行", "开始"),
-    ("服务器已就绪", "就绪"),
-    ("发送目标", "发送"),
-    ("执行中", "执行中"),
-    ("节点开始", "开始"),
-    ("节点结束", "结束"),
-    // 前缀匹配
-    ("ExecuteGripperMotion", "夹爪"),
-    ("GetTaskType", "获取类型"),
-    ("GetDetObjPose", "检测位姿"),
-    ("DetObjPose", "检测位姿"),
-    ("GetArmPose", "手臂位姿"),
-    ("CalcPutDownPose", "计算放置"),
-    ("CalcArmPose", "计算位姿"),
-    ("CalcGripperPos", "夹爪位置"),
-    ("CheckSafe", "安全检查"),
-    ("ArmControl", "手臂控制"),
-    ("ExecutePose", "执行位姿"),
-    ("WaitForTrigger", "等待触发"),
-    ("gripper", "夹爪"),
-    ("SendGoal", "发送目标"),
-    ("等待服务器", "等待服务器"),
-    ("[RESULT]", "结果"),
-    ("执行完成", "完成"),
-    // 包含匹配
-    ("ArmObstacle", "障碍物"),
-    ("ModifyArmObstacle", "障碍物"),
-    ("ArmTransitionPoint", "过渡点"),
-    ("transition", "过渡点"),
-    ("ExecuteDoubleArmMove", "手臂运动"),
-    ("arm_move_plan", "手臂规划"),
-    ("arm_move_exec", "手臂执行"),
-    ("GetGoalPose", "目标位姿"),
-    ("GetReadyPose", "准备"),
-];
-
-/// 动作状态后缀映射（用于 "XXX 开始/完成" 格式）
-const ACTION_STATE_SUFFIX_MAP: &[(&str, &str)] = &[
-    ("GetReadyPose", "准备"),
-    ("ModifyArmObstacle", "障碍"),
-    ("GetGoalPose", "目标"),
-    ("ArmTransitionPoint", "过渡"),
-    ("ExecuteDoubleArmMove", "运动"),
-];
-
-/// 分离名称和时间部分
-/// 例如: "ExecuteGripperMotionAction (0.51s)" -> ("ExecuteGripperMotionAction", "0.51s")
-fn split_name_and_time(full_name: &str) -> (&str, &str) {
-    if let Some(paren_pos) = full_name.rfind(" (")
-        && full_name.ends_with(')')
-    {
-        let time = &full_name[paren_pos + 2..full_name.len() - 1];
-        let name = &full_name[..paren_pos];
-        (name, time)
-    } else {
-        (full_name, "")
-    }
-}
-
-/// 截断字符串到指定字符数
-fn truncate_to_chars(s: &str, max_chars: usize) -> &str {
-    s.char_indices()
-        .nth(max_chars)
-        .map(|(i, _)| &s[..i])
-        .unwrap_or(s)
-}
-
-/// 从子步骤名称中提取简短的模块名称和时间（分开返回）
-/// 例如: "ExecuteGripperMotionAction (0.51s)" -> ("夹爪", "0.51s")
-fn extract_short_module_name(full_name: &str) -> (String, String) {
-    let (name_part, time_part) = split_name_and_time(full_name);
-
-    // 处理 "XXX 开始/完成" 格式
-    for (suffix, symbol) in [(" 开始", "▶"), (" 完成", "✓")] {
-        if let Some(module) = name_part.strip_suffix(suffix) {
-            let short = find_action_state_suffix(module).unwrap_or(module);
-            return (format!("{}{}", short, symbol), time_part.to_string());
-        }
-    }
-
-    // 使用映射表查找简短名称
-    for (pattern, short) in MODULE_NAME_MAP {
-        if name_part == *pattern || name_part.starts_with(pattern) || name_part.contains(pattern) {
-            return (short.to_string(), time_part.to_string());
-        }
-    }
-
-    // 默认处理：如果名称太长，截取前8个字符
-    let short_name = if name_part.chars().count() > 8 {
-        truncate_to_chars(name_part, 8)
-    } else {
-        name_part
-    };
-
-    (short_name.to_string(), time_part.to_string())
-}
-
-/// 查找动作状态后缀的简短名称
-fn find_action_state_suffix(module: &str) -> Option<&'static str> {
-    for (pattern, short) in ACTION_STATE_SUFFIX_MAP {
-        if module.contains(pattern) {
-            return Some(short);
-        }
-    }
-    None
-}
-
-/// 绘制时间标注
+/// 绘制时间标注（居中于色块上方）
 fn draw_time_label<DB: DrawingBackend>(
     chart: &mut ChartContext<
         DB,
@@ -878,6 +718,7 @@ fn draw_time_label<DB: DrawingBackend>(
     >,
     font_loader: &FontLoader,
     start: f64,
+    duration: f64,
     y_pos: f64,
     y_height: f64,
 ) -> Result<()>
@@ -885,117 +726,54 @@ where
     DB::ErrorType: 'static,
 {
     let start_time_text = format!("{:.1}s", start);
+    let text_x = start + duration / 2.0;
     chart.draw_series(std::iter::once(Text::new(
         start_time_text,
-        (start, y_pos + y_height + 0.25),
+        (text_x, y_pos + y_height + 0.25),
         font_loader
             .font_desc(56) // 4x 分辨率
             .color(&BLACK)
-            .pos(Pos::new(HPos::Left, VPos::Top))
+            .pos(Pos::new(HPos::Center, VPos::Top))
             .transform(FontTransform::None),
     )))?;
 
     Ok(())
 }
 
-/// 根据持续时间选择字体大小（4x 分辨率）
-fn select_font_size(duration: f64) -> i32 {
-    if duration > 15.0 {
-        88
-    } else if duration > 8.0 {
-        80
-    } else if duration > 2.0 {
-        72
-    } else {
-        64
-    }
+/// 构建消耗时间文本（图块下方显示，统一秒为单位，保留三位小数）
+fn build_duration_text(duration: f64) -> String {
+    format!("{:.3}s", duration)
 }
 
-/// 构建主标签文本
-fn build_label_text(step_type: &str, detail_info: &str, duration: f64) -> String {
-    // 手臂动作使用特殊格式
-    if step_type == "arm" {
-        return format!("{}-{:.1}s", detail_info, duration);
-    }
-
-    // 根据持续时间选择显示格式
-    if duration > 20.0 {
-        format!(
-            "{}\n{}",
-            detail_info,
-            t!("gantt.total_time", time = format!("{:.1}", duration))
-        )
-    } else if duration > 10.0 {
-        format!("{} ({:.1}s)", detail_info, duration)
-    } else if duration > 5.0 {
-        let short_detail = truncate_str(detail_info, 10, 7);
-        format!("{} ({:.1}s)", short_detail, duration)
-    } else if duration > 2.0 {
-        let type_name = step_type_display(step_type);
-        format!("{} ({:.1}s)", type_name, duration)
-    } else {
-        format!("{:.1}s", duration)
-    }
-}
-
-/// 将步骤类型转换为本地化名称
-fn step_type_display(step_type: &str) -> String {
-    match step_type {
-        "nav" | "navigation" => t!("action.navigation").to_string(),
-        "preplan" => t!("action.preplan").to_string(),
-        "head" => t!("action.head").to_string(),
-        "waist" => t!("action.waist").to_string(),
-        _ => t!("action.default").to_string(),
-    }
-}
-
-/// 截断字符串（如果超过 max_len，截取 truncate_at 个字符并加省略号）
-fn truncate_str(s: &str, max_len: usize, truncate_at: usize) -> String {
-    if s.chars().count() > max_len {
-        let truncated: String = s.chars().take(truncate_at).collect();
-        format!("{}...", truncated)
-    } else {
-        s.to_string()
-    }
-}
-
-/// 绘制主标签
+/// 绘制消耗时间标签（图块下方）
 fn draw_main_label<DB: DrawingBackend>(
     chart: &mut ChartContext<
         DB,
         Cartesian2d<plotters::coord::types::RangedCoordf64, plotters::coord::types::RangedCoordf64>,
     >,
     font_loader: &FontLoader,
-    detail_info: &str,
+    _detail_info: &str,
     start: f64,
     duration: f64,
     y_pos: f64,
-    step_type: &str,
+    _step_type: &str,
 ) -> Result<()>
 where
     DB::ErrorType: 'static,
 {
     let text_x = start + duration / 2.0;
-    let text_y = y_pos + 0.08;
 
-    // 创建主标签文本
-    let label_text = build_label_text(step_type, detail_info, duration);
-
-    // 选择字体大小（4x 分辨率）
-    let font_size = select_font_size(duration);
-
-    // 绘制主标签
-    if duration > 0.5 {
-        chart.draw_series(std::iter::once(Text::new(
-            label_text,
-            (text_x, text_y),
-            font_loader
-                .font_desc(font_size)
-                .color(&BLACK)
-                .pos(Pos::new(HPos::Center, VPos::Top))
-                .transform(FontTransform::None),
-        )))?;
-    }
+    // 消耗时间：图块下方
+    let duration_text = build_duration_text(duration);
+    chart.draw_series(std::iter::once(Text::new(
+        duration_text,
+        (text_x, y_pos + 0.10),
+        font_loader
+            .font_desc(56)
+            .color(&BLACK)
+            .pos(Pos::new(HPos::Center, VPos::Top))
+            .transform(FontTransform::None),
+    )))?;
 
     Ok(())
 }
