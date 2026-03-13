@@ -236,6 +236,11 @@ static ARM_TRANSITION_DONE_REGEX: LazyLock<Regex> = LazyLock::new(|| {
 static ARM_MOVE_START_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"arm_move start cmd=(\d+)").expect("invalid regex: ARM_MOVE_START_REGEX")
 });
+/// arm_move planning complete cmd=xxx status=xxx planning_ms=xxx
+static ARM_MOVE_PLANNING_COMPLETE_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"arm_move planning complete cmd=(\d+)")
+        .expect("invalid regex: ARM_MOVE_PLANNING_COMPLETE_REGEX")
+});
 /// arm_move response: success cmd=xxx / result code=xxx
 static ARM_MOVE_RESPONSE_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"arm_move response: (?:success cmd=(\d+)|result code=(\d+))")
@@ -393,6 +398,7 @@ pub fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<Navigatio
     let arm_transition_start_regex = &*ARM_TRANSITION_START_REGEX;
     let arm_transition_done_regex = &*ARM_TRANSITION_DONE_REGEX;
     let arm_move_start_regex = &*ARM_MOVE_START_REGEX;
+    let arm_move_planning_complete_regex = &*ARM_MOVE_PLANNING_COMPLETE_REGEX;
     let arm_move_response_regex = &*ARM_MOVE_RESPONSE_REGEX;
 
     let mut flows = Vec::new();
@@ -752,14 +758,14 @@ pub fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<Navigatio
             continue;
         }
 
-        // arm_move 开始
+        // arm_move 开始 → 创建规划阶段动作
         if let Some(caps) = arm_move_start_regex.captures(&line.line) {
             let cmd = caps[1].to_string();
             if let Some(ref mut ctx) = active_bt_node {
                 ctx.sub_actions.push(new_action(
-                    "arm_move",
+                    "arm_move_plan",
                     cmd.parse().ok(),
-                    format!("arm_move({})", cmd),
+                    format!("arm_move_plan({})", cmd),
                     line.timestamp,
                     format!("arm_move start cmd={}", cmd),
                 ));
@@ -767,10 +773,36 @@ pub fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<Navigatio
             continue;
         }
 
-        // arm_move 响应
+        // arm_move 规划完成 → 结束规划阶段，创建执行阶段
+        if let Some(caps) = arm_move_planning_complete_regex.captures(&line.line) {
+            let cmd = caps[1].to_string();
+            let ts = line.timestamp;
+            // 结束规划阶段
+            update_bt_subaction(&mut active_bt_node, "arm_move_plan", |action| {
+                action.sub_steps.push(SubStep {
+                    name: "arm_move planning complete".to_string(),
+                    timestamp: ts,
+                });
+                action.end_ts = Some(ts);
+                action.status = "ok".to_string();
+            });
+            // 创建执行阶段
+            if let Some(ref mut ctx) = active_bt_node {
+                ctx.sub_actions.push(new_action(
+                    "arm_move_exec",
+                    cmd.parse().ok(),
+                    format!("arm_move_exec({})", cmd),
+                    ts,
+                    format!("arm_move planning complete cmd={}", cmd),
+                ));
+            }
+            continue;
+        }
+
+        // arm_move 响应 → 结束执行阶段
         if arm_move_response_regex.is_match(&line.line) {
             let ts = line.timestamp;
-            update_bt_subaction(&mut active_bt_node, "arm_move", |action| {
+            update_bt_subaction(&mut active_bt_node, "arm_move_exec", |action| {
                 action.sub_steps.push(SubStep {
                     name: "arm_move response".to_string(),
                     timestamp: ts,

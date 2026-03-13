@@ -130,6 +130,14 @@ action.arm_move:
   zh-CN: "手臂运动"
   en: "Arm Movement"
 
+action.arm_move_plan:
+  zh-CN: "手臂规划"
+  en: "Arm Planning"
+
+action.arm_move_exec:
+  zh-CN: "手臂执行"
+  en: "Arm Execution"
+
 action.gripper:
   zh-CN: "夹爪"
   en: "Gripper"

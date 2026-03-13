@@ -50,7 +50,8 @@ const ACTION_TYPE_CONFIG: &[(&str, &str, RGBColor)] = &[
     ("det_obj_pose", "目标检测", RGBColor(255, 228, 181)), // 浅黄橙
     ("obstacle", "障碍物", RGBColor(255, 182, 193)), // 浅粉红
     ("transition", "过渡点", RGBColor(216, 191, 216)), // 淡紫色
-    ("arm_move", "手臂运动", RGBColor(152, 251, 152)), // 淡绿色
+    ("arm_move_plan", "手臂规划", RGBColor(144, 202, 249)), // 浅蓝色
+    ("arm_move_exec", "手臂执行", RGBColor(152, 251, 152)), // 淡绿色
     ("gripper", "夹爪", RGBColor(240, 230, 140)),    // 卡其色
 ];
 
@@ -76,7 +77,8 @@ fn get_action_type_display(action_type: &str) -> String {
         "det_obj_pose" => t!("action.det_obj_pose").to_string(),
         "obstacle" => t!("action.obstacle").to_string(),
         "transition" => t!("action.transition").to_string(),
-        "arm_move" => t!("action.arm_move").to_string(),
+        "arm_move_plan" => t!("action.arm_move_plan").to_string(),
+        "arm_move_exec" => t!("action.arm_move_exec").to_string(),
         "gripper" => t!("action.gripper").to_string(),
         _ => action_type.to_string(),
     }
@@ -133,7 +135,12 @@ const SUBSTEP_COLOR_CONFIG: &[SubStepColorConfig] = &[
         use_alternating: false,
     },
     SubStepColorConfig {
-        pattern: "arm_move",
+        pattern: "arm_move_plan",
+        color: RGBColor(144, 202, 249),
+        use_alternating: false,
+    },
+    SubStepColorConfig {
+        pattern: "arm_move_exec",
         color: RGBColor(152, 251, 152),
         use_alternating: false,
     },
@@ -786,7 +793,8 @@ const MODULE_NAME_MAP: &[(&str, &str)] = &[
     ("ArmTransitionPoint", "过渡点"),
     ("transition", "过渡点"),
     ("ExecuteDoubleArmMove", "手臂运动"),
-    ("arm_move", "手臂运动"),
+    ("arm_move_plan", "手臂规划"),
+    ("arm_move_exec", "手臂执行"),
     ("GetGoalPose", "目标位姿"),
     ("GetReadyPose", "准备"),
 ];
