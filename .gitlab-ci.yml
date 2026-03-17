@@ -1,5 +1,6 @@
 # GitLab CI/CD 配置
 # Rust workspace 项目的持续集成
+# 不依赖 rust 官方镜像，在通用 Ubuntu 镜像中通过 rustup 安装
 
 stages:
   - check
@@ -8,11 +9,14 @@ stages:
 
 variables:
   CARGO_HOME: ${CI_PROJECT_DIR}/.cargo
+  RUSTUP_HOME: ${CI_PROJECT_DIR}/.rustup
   RUSTFLAGS: "-D warnings"
   # 使用 nightly（edition 2024 需要）
   RUST_TOOLCHAIN: nightly
+  # rustup 安装参数
+  RUSTUP_INIT_SKIP_PATH_CHECK: "yes"
 
-# 缓存 cargo 依赖和构建产物
+# 缓存 cargo 依赖、rustup 工具链和构建产物
 .rust-cache: &rust-cache
   cache:
     key:
@@ -21,13 +25,25 @@ variables:
     paths:
       - .cargo/registry/
       - .cargo/git/
+      - .rustup/
       - target/
     policy: pull-push
 
-# 基础镜像配置
+# 基础镜像配置：Ubuntu + 手动安装 Rust
 .rust-base: &rust-base
-  image: rust:latest
+  image: ubuntu:22.04
   before_script:
+    # 安装系统依赖（ssh2 crate 需要 libssh2、openssl）
+    - apt-get update -qq
+    - apt-get install -y -qq curl build-essential pkg-config
+        libssl-dev libssh2-1-dev cmake > /dev/null 2>&1
+    # 安装 Rust（如已缓存则跳过下载）
+    - export PATH="${CARGO_HOME}/bin:${PATH}"
+    - |
+      if ! command -v rustup &> /dev/null; then
+        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs |
+          sh -s -- -y --default-toolchain ${RUST_TOOLCHAIN} --profile minimal
+      fi
     - rustup default ${RUST_TOOLCHAIN}
     - rustup component add rustfmt clippy
     - rustc --version && cargo --version
