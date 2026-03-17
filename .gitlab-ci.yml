@@ -1,6 +1,6 @@
 # GitLab CI/CD 配置
 # Rust workspace 项目的持续集成
-# 不依赖 rust 官方镜像，在通用 Ubuntu 镜像中通过 rustup 安装
+# Shell executor：通过 rustup 在 runner 上安装 Rust nightly
 
 stages:
   - check
@@ -29,16 +29,11 @@ variables:
       - target/
     policy: pull-push
 
-# 基础镜像配置：Ubuntu + 手动安装 Rust
+# Shell executor 基础配置：安装 Rust（系统依赖需预装在 runner 上）
 .rust-base: &rust-base
-  image: ubuntu:22.04
   before_script:
-    # 安装系统依赖（ssh2 crate 需要 libssh2、openssl）
-    - apt-get update -qq
-    - apt-get install -y -qq curl build-essential pkg-config
-        libssl-dev libssh2-1-dev cmake > /dev/null 2>&1
-    # 安装 Rust（如已缓存则跳过下载）
     - export PATH="${CARGO_HOME}/bin:${PATH}"
+    # 安装 Rust（如已缓存则跳过下载）
     - |
       if ! command -v rustup &> /dev/null; then
         curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs |
