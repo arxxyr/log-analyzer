@@ -513,9 +513,10 @@ fn generate_round_gantt(
 
     // 构建标题，包含循环类型（去掉层级信息）
     // 如果有暂停时间，显示有效时间和暂停时间
+    // 注意：plotters 的 caption 不支持换行符，这里用 " | " 拼接为单行
     let title = if pause_duration > 0.0 {
         format!(
-            "{}\n{}",
+            "{} | {}",
             t!(
                 "gantt.title_with_pause",
                 cycle_type = round.cycle_type.to_string(),
@@ -532,7 +533,7 @@ fn generate_round_gantt(
         )
     } else {
         format!(
-            "{}\n{}",
+            "{} | {}",
             t!(
                 "gantt.title_no_pause",
                 cycle_type = round.cycle_type.to_string(),
