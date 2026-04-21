@@ -332,7 +332,7 @@ impl FontLoader {
             // macOS 中文字体
             let chinese_fonts = ["PingFang SC", "Hiragino Sans GB", "STHeiti", "Heiti SC"];
 
-            for font in &chinese_fonts {
+            if let Some(font) = chinese_fonts.first() {
                 eprintln!("[字体] macOS 中文环境，使用: {}", font);
                 return FontChoice::Chinese(font.to_string());
             }
@@ -348,10 +348,10 @@ impl FontLoader {
         use std::process::Command;
 
         // 检查 LANG 环境变量
-        if let Ok(lang) = std::env::var("LANG") {
-            if lang.to_lowercase().contains("zh") {
-                return true;
-            }
+        if let Ok(lang) = std::env::var("LANG")
+            && lang.to_lowercase().contains("zh")
+        {
+            return true;
         }
 
         // 使用 defaults 命令获取系统语言

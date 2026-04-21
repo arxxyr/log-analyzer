@@ -2,13 +2,26 @@
 //!
 //! 本模块负责从日志中检测任务轮次
 //!
-//! 日志格式：
-//! - 初始循环开始: `[初始循环] ===== 初始循环开始（气密设备为空）=====`
-//! - 初始循环完成: `[初始循环] 初始循环完成，气密设备中有工件`
-//! - 常规循环开始: `[常规循环] 常规循环 N`
-//! - 常规循环完成: `[常规循环] 常规循环 N 放置完成`
-//! - 最终循环开始: `[最终循环] 最终循环：取出气密工件并放置`
-//! - 最终循环完成: `[最终循环] 最终循环完成`
+//! 日志格式（同时兼容新旧两种）：
+//! - 初始循环开始:
+//!   - 新: `[初始循环] ===== 初始填充开始，已上件工位数 N =====`
+//!   - 旧: `[初始循环] ===== 初始循环开始（气密设备为空）=====`
+//! - 初始循环完成:
+//!   - 新: `[初始循环] 初始填充完成，已上件工位数 N`
+//!   - 旧: `[初始循环] 初始循环完成，气密设备中有工件`
+//! - 常规循环开始:
+//!   - 新: `[常规循环] 常规循环 N，目标工位 M`
+//!   - 旧: `[常规循环] 常规循环 N`
+//! - 常规循环完成: `[常规循环] 常规循环 N 放置完成`（未变）
+//! - 收尾/最终循环开始:
+//!   - 新: `[收尾前校正] ...`
+//!   - 旧: `[最终循环] 最终循环：取出气密工件并放置`
+//! - 收尾/最终循环完成:
+//!   - 新: `[收尾循环] 双工位收尾完成`
+//!   - 旧: `[最终循环] 最终循环完成`
+//!
+//! 注意：LogNode 节点注册时会在 log_node.cpp:39 输出一行包含模板字符串（含
+//! `{variable}` 占位符）的日志，正则通过强制要求 `\d+` 等具体值来避免误匹配。
 
 use std::sync::LazyLock;
 
@@ -18,22 +31,33 @@ use regex::Regex;
 use crate::models::{CycleType, LogLine, PauseEvent, Round};
 
 // ===== 循环检测正则 =====
+//
+// 所有正则都必须用 `\d+` 等具体值形式，避免匹配 LogNode 注册行中的
+// `{variable}` 占位符（那一行与真实事件长得像，但 `log_node.cpp:39`，
+// 真实事件在 `log_node.cpp:62`）。
 
-/// 初始循环开始: [初始循环] ===== 初始循环开始（气密设备为空）=====
+/// 初始循环开始（新旧格式并存）
 static INIT_START_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"\[初始循环\]\s*=+\s*初始循环开始（气密设备为空）\s*=+")
-        .expect("invalid regex: INIT_START_REGEX")
+    Regex::new(
+        r"\[初始循环\]\s*=+\s*(?:初始填充开始，已上件工位数\s+\d+|初始循环开始（气密设备为空）)\s*=+",
+    )
+    .expect("invalid regex: INIT_START_REGEX")
 });
 
-/// 初始循环完成: [初始循环] 初始循环完成，气密设备中有工件
+/// 初始循环完成（新旧格式并存）
 static INIT_END_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"\[初始循环\]\s*初始循环完成，气密设备中有工件")
-        .expect("invalid regex: INIT_END_REGEX")
+    Regex::new(
+        r"\[初始循环\]\s*(?:初始填充完成，已上件工位数\s+\d+|初始循环完成，气密设备中有工件)",
+    )
+    .expect("invalid regex: INIT_END_REGEX")
 });
 
-/// 常规循环开始: [常规循环] 常规循环 N
+/// 常规循环开始:
+///   - 新: `[常规循环] 常规循环 N，目标工位 M`
+///   - 旧: `[常规循环] 常规循环 N`（行尾无后缀）
 static NORMAL_START_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"\[常规循环\]\s*常规循环\s*(\d+)\s*$").expect("invalid regex: NORMAL_START_REGEX")
+    Regex::new(r"\[常规循环\]\s*常规循环\s*(\d+)(?:，目标工位\s+\d+|\s*$)")
+        .expect("invalid regex: NORMAL_START_REGEX")
 });
 
 /// 常规循环完成: [常规循环] 常规循环 N 放置完成
@@ -42,15 +66,28 @@ static NORMAL_END_REGEX: LazyLock<Regex> = LazyLock::new(|| {
         .expect("invalid regex: NORMAL_END_REGEX")
 });
 
-/// 最终循环开始: [最终循环] 最终循环：取出气密工件并放置
+/// 收尾/最终循环开始:
+///   - 新: `[收尾前校正] loaded_leak_station_count=N, ...`（收尾阶段唯一入口）
+///   - 旧: `[最终循环] 最终循环：取出气密工件并放置`
+///
+/// 必须要求 `loaded_leak_station_count=\d+`，才能避开：
+///   - `log_node.cpp:39` 打印的 `message='[收尾前校正] loaded_leak_station_count={...}'`
+///     模板注册行（占位符 `{...}` 非 `\d+`）
+///   - `[收尾前校正] loaded_leak_station_count 与 put_poses 剩余数量不一致`
+///     警告行（`count` 与 `与` 之间无 `=`）
 static FINAL_START_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"\[最终循环\]\s*最终循环：取出气密工件并放置")
-        .expect("invalid regex: FINAL_START_REGEX")
+    Regex::new(
+        r"\[收尾前校正\]\s+loaded_leak_station_count=\d+|\[最终循环\]\s*最终循环：取出气密工件并放置",
+    )
+    .expect("invalid regex: FINAL_START_REGEX")
 });
 
-/// 最终循环完成: [最终循环] 最终循环完成
+/// 收尾/最终循环完成:
+///   - 新: `[收尾循环] 双工位收尾完成`
+///   - 旧: `[最终循环] 最终循环完成`
 static FINAL_END_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"\[最终循环\]\s*最终循环完成").expect("invalid regex: FINAL_END_REGEX")
+    Regex::new(r"\[收尾循环\]\s*双工位收尾完成|\[最终循环\]\s*最终循环完成")
+        .expect("invalid regex: FINAL_END_REGEX")
 });
 
 // ===== 姿态信息正则 =====
@@ -213,10 +250,17 @@ pub fn detect_rounds(lines: &[LogLine], t_last: f64) -> Result<Vec<Round>> {
             continue;
         }
 
-        // 检测最终循环开始
+        // 检测最终/收尾循环开始
+        // 幂等：如果已在 Final 轮次中，忽略后续的重复起始标记（新日志中
+        // `[收尾前校正]` 可能伴随多条警告/模板行，全部归入同一个收尾轮次）
         if final_start_regex.is_match(&line.line) {
-            finalize_current_round(&mut current, &mut rounds, line.timestamp);
-            current = Some(create_round(&rounds, CycleType::Final, 999, line.timestamp));
+            if !matches!(
+                current.as_ref().map(|r| &r.cycle_type),
+                Some(CycleType::Final)
+            ) {
+                finalize_current_round(&mut current, &mut rounds, line.timestamp);
+                current = Some(create_round(&rounds, CycleType::Final, 999, line.timestamp));
+            }
             continue;
         }
 

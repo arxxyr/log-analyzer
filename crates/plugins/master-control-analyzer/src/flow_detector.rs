@@ -93,18 +93,22 @@ static PREPLAN_START_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"PrePlanNavigationNode\[([^\]]+)\]\s*-\s*开始执行")
         .expect("invalid regex: PREPLAN_START_REGEX")
 });
-/// PrePlanNavigationNode[xxx] - 设置预规划目标:
+/// PrePlanNavigationNode[xxx] - 发送预规划目标:（新格式）或 设置预规划目标:（旧格式）
 static PREPLAN_POS_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"PrePlanNavigationNode\[([^\]]+)\]\s*-\s*设置预规划目标:")
+    Regex::new(r"PrePlanNavigationNode\[([^\]]+)\]\s*-\s*(?:发送|设置)预规划目标:")
         .expect("invalid regex: PREPLAN_POS_REGEX")
 });
-/// 位置: (x, y, z)
+/// 位置信息行（新旧格式并存）:
+///   - 新: `  position: (x, y, z)` 或 `解析成功: (x, y, z)`
+///   - 旧: `位置: (x, y, z)`
 static PREPLAN_POSITION_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"位置:\s*\(([^)]+)\)").expect("invalid regex: PREPLAN_POSITION_REGEX")
+    Regex::new(r"(?:position|位置|解析成功):\s*\(([^)]+)\)")
+        .expect("invalid regex: PREPLAN_POSITION_REGEX")
 });
-/// action=N
-static PREPLAN_ACTION_REGEX: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"action=(\d+)").expect("invalid regex: PREPLAN_ACTION_REGEX"));
+/// action_type=N（新格式）或 action=N（旧格式）
+static PREPLAN_ACTION_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\baction(?:_type)?=(\d+)").expect("invalid regex: PREPLAN_ACTION_REGEX")
+});
 /// PrePlanNavigationNode[xxx] - 服务响应: error_code=N
 static PREPLAN_RESPONSE_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"PrePlanNavigationNode\[([^\]]+)\]\s*-\s*服务响应:\s*error_code=(\d+)")
