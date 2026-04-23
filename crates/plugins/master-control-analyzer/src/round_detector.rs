@@ -117,9 +117,11 @@ static FAIL_PAUSE_REGEX: LazyLock<Regex> = LazyLock::new(|| {
         .expect("invalid regex: FAIL_PAUSE_REGEX")
 });
 
-/// 恢复检测模式 2: TaskGraphExecutor: 重试节点 ...
+/// 恢复检测模式 2: TaskGraphExecutor: 重试节点 / 跳过节点（视为成功）
+/// 失败暂停可由「重试」或「跳过」结束，二者都应扣除等待时间
 static RETRY_RESUME_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"TaskGraphExecutor:\s*重试节点\s+\S+").expect("invalid regex: RETRY_RESUME_REGEX")
+    Regex::new(r"TaskGraphExecutor:\s*(?:重试节点|跳过节点)\s+\S+")
+        .expect("invalid regex: RETRY_RESUME_REGEX")
 });
 
 /// 暂停检测模式 3: ROS2ActionAdapter[xxx] - 暂停（动作被暂停）

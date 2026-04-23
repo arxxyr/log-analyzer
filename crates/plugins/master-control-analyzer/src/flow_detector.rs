@@ -145,9 +145,10 @@ static BT_START_MARKER_REGEX: LazyLock<Regex> = LazyLock::new(|| {
 /// 节点ID: normal_arm_leak_swap
 static BT_NODE_ID_REGEX: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"节点ID:\s*(\S+)").expect("invalid regex: BT_NODE_ID_REGEX"));
-/// ========== BehaviorTree 节点结束 ==========
+/// ========== BehaviorTree 节点结束/失败 ==========（新版日志中失败用「节点失败」单独标记）
 static BT_END_MARKER_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"=+\s*BehaviorTree\s*节点结束\s*=+").expect("invalid regex: BT_END_MARKER_REGEX")
+    Regex::new(r"=+\s*BehaviorTree\s*节点(?:结束|失败)\s*=+")
+        .expect("invalid regex: BT_END_MARKER_REGEX")
 });
 /// 结果: SUCCESS / FAILURE
 static BT_RESULT_REGEX: LazyLock<Regex> =
@@ -194,9 +195,9 @@ static DET_OBJ_POSE_RESPONSE_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"DetObjPose response ret=(\d+)")
         .expect("invalid regex: DET_OBJ_POSE_RESPONSE_REGEX")
 });
-/// DetObjPose done
+/// DetObjPose done（兼容旧版 `DetObjPose done goal_pose=...` 与新版 `DetObjPose multi done right=...`）
 static DET_OBJ_POSE_DONE_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"DetObjPose done goal_pose=").expect("invalid regex: DET_OBJ_POSE_DONE_REGEX")
+    Regex::new(r"DetObjPose(?:\s+\w+)?\s+done\b").expect("invalid regex: DET_OBJ_POSE_DONE_REGEX")
 });
 /// gripper done
 static GRIPPER_DONE_REGEX: LazyLock<Regex> = LazyLock::new(|| {
@@ -245,10 +246,17 @@ static ARM_MOVE_PLANNING_COMPLETE_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"arm_move planning complete cmd=(\d+)")
         .expect("invalid regex: ARM_MOVE_PLANNING_COMPLETE_REGEX")
 });
-/// arm_move response: success cmd=xxx / result code=xxx
+/// arm_move response: 三种结束形态
+///   - 主线程成功: `arm_move response: success cmd=N`
+///   - 主线程失败: `arm_move response: failure cmd=N code=X message=...`
+///   - 回调线程结果: `arm_move response: result code=N msg=...`（N=0 表示成功，非 0 表示失败码）
+///
+/// 捕获组：1=success cmd, 2=failure code, 3=result code（用于推断真实状态）
 static ARM_MOVE_RESPONSE_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"arm_move response: (?:success cmd=(\d+)|result code=(\d+))")
-        .expect("invalid regex: ARM_MOVE_RESPONSE_REGEX")
+    Regex::new(
+        r"arm_move response: (?:success cmd=(\d+)|failure cmd=\d+ code=(\d+)|result code=(\d+))",
+    )
+    .expect("invalid regex: ARM_MOVE_RESPONSE_REGEX")
 });
 
 /// 为指定类型的未完成 adapter 动作添加子步骤
@@ -805,8 +813,33 @@ pub fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<Navigatio
 
         // arm_move 响应 → 结束执行阶段
         // 如果没有 planning complete 隔开，将 arm_move_plan 转为 arm_move_exec
-        if arm_move_response_regex.is_match(&line.line) {
+        if let Some(caps) = arm_move_response_regex.captures(&line.line) {
             let ts = line.timestamp;
+            // 解析真实结果：success / failure code / result code（0=ok，非 0=失败码）
+            let (final_status, step_label) = if caps.get(1).is_some() {
+                ("ok".to_string(), "arm_move response: success".to_string())
+            } else if let Some(code) = caps.get(2) {
+                (
+                    format!("failed_{}", code.as_str()),
+                    format!("arm_move response: failure code={}", code.as_str()),
+                )
+            } else if let Some(code) = caps.get(3) {
+                let code_str = code.as_str();
+                if code_str == "0" {
+                    (
+                        "ok".to_string(),
+                        "arm_move response: result code=0".to_string(),
+                    )
+                } else {
+                    (
+                        format!("failed_{}", code_str),
+                        format!("arm_move response: result code={}", code_str),
+                    )
+                }
+            } else {
+                ("ok".to_string(), "arm_move response".to_string())
+            };
+
             // 先尝试关闭 arm_move_exec（有 planning complete 的正常路径）
             let has_exec = active_bt_node.as_ref().is_some_and(|ctx| {
                 ctx.sub_actions
@@ -814,25 +847,29 @@ pub fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<Navigatio
                     .any(|a| a.action_type == "arm_move_exec" && a.end_ts.is_none())
             });
             if has_exec {
+                let label = step_label.clone();
+                let status = final_status.clone();
                 update_bt_subaction(&mut active_bt_node, "arm_move_exec", |action| {
                     action.sub_steps.push(SubStep {
-                        name: "arm_move response".to_string(),
+                        name: label.clone(),
                         timestamp: ts,
                     });
                     action.end_ts = Some(ts);
-                    action.status = "ok".to_string();
+                    action.status = status.clone();
                 });
             } else {
                 // 没有 planning complete → 将 arm_move_plan 转为 arm_move_exec 并关闭
+                let label = step_label.clone();
+                let status = final_status.clone();
                 update_bt_subaction(&mut active_bt_node, "arm_move_plan", |action| {
                     action.action_type = "arm_move_exec".to_string();
                     action.label = action.label.replace("arm_move_plan", "arm_move_exec");
                     action.sub_steps.push(SubStep {
-                        name: "arm_move response".to_string(),
+                        name: label.clone(),
                         timestamp: ts,
                     });
                     action.end_ts = Some(ts);
-                    action.status = "ok".to_string();
+                    action.status = status.clone();
                 });
             }
             continue;
