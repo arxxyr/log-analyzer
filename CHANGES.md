@@ -6,7 +6,34 @@
 
 ---
 
-## v0.3.3 (2026-01-27) - 当前版本
+## v0.5.7 (2026-04-23) - 当前版本
+
+### 适配新版 master_control 日志格式（视觉/手臂/BT 节点）
+
+- **DetObjPose 视觉时间错误**：新版日志改为 `DetObjPose start[multi] ...` /
+  `DetObjPose multi done right=... left=... count=N`，旧正则
+  `DetObjPose done goal_pose=` 完全匹配不上，导致视觉子动作 `end_ts` 永远为
+  `None`、甘特图与 CSV 上耗时显示为异常值。新正则
+  `DetObjPose(?:\s+\w+)?\s+done\b` 同时兼容 single / multi 等所有变体
+- **arm_move 失败被吞 + 状态硬编码**：新版日志同时存在
+  `arm_move response: result code=N msg=...`（回调线程）和
+  `arm_move response: success cmd=N` / `failure cmd=N code=X message=...`
+  （主线程）。原正则不认 `failure` 分支，且 `result code=N` 时无视 N 的值
+  一律设 `status=ok`，失败被静默标记成成功。新正则三选一捕获，并按真实
+  捕获组判定 `ok` / `failed_<code>`
+- **BehaviorTree 节点失败标记不识别**：日志真实存在
+  `========== BehaviorTree 节点失败 ==========`（与 `节点结束` 并列），
+  旧正则只认前者，导致失败节点的 `BtNodeContext` 永远不关闭，其
+  sub_actions 会泄漏并附加到下一个 BT 节点。新正则
+  `BehaviorTree\s*节点(?:结束|失败)` 同时识别两种结束 marker
+- **跳过节点未扣除等待时间**：失败暂停 (`节点 X 失败，进入失败暂停状态`)
+  对端只匹配 `重试节点`，但用户经常通过
+  `跳过节点 X（视为成功）` 直接放行，新版日志即出现一次 7m39s 的等待未被
+  扣除。`RETRY_RESUME_REGEX` 扩为 `(?:重试节点|跳过节点)`
+
+---
+
+## v0.3.3 (2026-01-27)
 
 ### CI/CD 优化
 
