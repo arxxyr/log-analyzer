@@ -19,8 +19,8 @@ summary.flows_detected:
   en: "Detected %{count} navigation flows"
 
 summary.action_stats:
-  zh-CN: "动作统计: %{nav} 导航, %{preplan} 预打舵, %{arm} 手臂, %{head} 头部, %{waist} 腰部"
-  en: "Action stats: %{nav} navigation, %{preplan} pre-plan, %{arm} arm, %{head} head, %{waist} waist"
+  zh-CN: "动作统计: %{nav} 导航, %{preplan} 预打舵, %{arm} 手臂, %{gripper} 夹爪, %{head} 头部, %{waist} 腰部"
+  en: "Action stats: %{nav} navigation, %{preplan} pre-plan, %{arm} arm, %{gripper} gripper, %{head} head, %{waist} waist"
 
 summary.csv_records:
   zh-CN: "生成 %{count} 条 CSV 记录"
@@ -329,6 +329,10 @@ timeline_stats.nav_count:
 timeline_stats.arm_count:
   zh-CN: "机械臂: %{count} 个"
   en: "Arm: %{count}"
+
+timeline_stats.gripper_count:
+  zh-CN: "夹爪: %{count} 个"
+  en: "Gripper: %{count}"
 
 timeline_stats.head_count:
   zh-CN: "头部: %{count} 个"

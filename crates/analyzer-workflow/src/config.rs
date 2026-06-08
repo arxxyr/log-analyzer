@@ -539,8 +539,9 @@ impl Default for MultiFileConfig {
         track_priority.insert("RoundMarker".to_string(), 0);
         track_priority.insert("Navigation".to_string(), 1);
         track_priority.insert("Arm".to_string(), 2);
-        track_priority.insert("Head".to_string(), 3);
-        track_priority.insert("Waist".to_string(), 4);
+        track_priority.insert("Gripper".to_string(), 3);
+        track_priority.insert("Head".to_string(), 4);
+        track_priority.insert("Waist".to_string(), 5);
 
         Self {
             enabled: false,

@@ -87,13 +87,14 @@ impl AnalyzerPlugin for MasterControlAnalyzer {
 /// 统计导航流程中的各类动作数量
 ///
 /// # 返回
-/// (导航数, 预打舵数, 手臂数, 头部数, 腰部数)
-fn count_actions(flows: &[NavigationFlow]) -> (usize, usize, usize, usize, usize) {
+/// (导航数, 预打舵数, 手臂数, 头部数, 腰部数, 夹爪数)
+fn count_actions(flows: &[NavigationFlow]) -> (usize, usize, usize, usize, usize, usize) {
     let mut nav_count = 0;
     let mut preplan_count = 0;
     let mut arm_count = 0;
     let mut head_count = 0;
     let mut waist_count = 0;
+    let mut gripper_count = 0;
 
     for flow in flows {
         for op in &flow.operations {
@@ -103,12 +104,20 @@ fn count_actions(flows: &[NavigationFlow]) -> (usize, usize, usize, usize, usize
                 "arm" => arm_count += 1,
                 "head" => head_count += 1,
                 "waist" => waist_count += 1,
+                "gripper" => gripper_count += 1,
                 _ => {}
             }
         }
     }
 
-    (nav_count, preplan_count, arm_count, head_count, waist_count)
+    (
+        nav_count,
+        preplan_count,
+        arm_count,
+        head_count,
+        waist_count,
+        gripper_count,
+    )
 }
 
 /// 内部分析函数（使用原生 Rust 类型）
@@ -139,7 +148,8 @@ fn run_analysis_internal(input_file: &str, output_dir: &str) -> Result<AnalyzeRe
     let flow_count = flows.len();
 
     // 统计各类动作
-    let (nav_count, preplan_count, arm_count, head_count, waist_count) = count_actions(&flows);
+    let (nav_count, preplan_count, arm_count, head_count, waist_count, gripper_count) =
+        count_actions(&flows);
 
     // 4. 构建CSV记录
     let records = build_csv_records(&flows, &rounds, t0);
@@ -219,7 +229,8 @@ fn run_analysis_internal(input_file: &str, output_dir: &str) -> Result<AnalyzeRe
             preplan = preplan_count,
             arm = arm_count,
             head = head_count,
-            waist = waist_count
+            waist = waist_count,
+            gripper = gripper_count
         ),
         t!("summary.csv_records", count = record_count),
         t!("summary.output_dir", path = output_dir)
@@ -317,14 +328,15 @@ fn build_timeline(
             events.push(nav_event);
         }
 
-        // 3. 添加机械臂、头部、腰部动作事件
+        // 3. 添加机械臂、夹爪、头部、腰部动作事件
         for (op_idx, op) in flow.operations.iter().enumerate() {
             if let (Some(start), Some(end)) = (op.start_ts, op.end_ts) {
                 let (track, color) = match op.action_type.as_str() {
-                    "arm" => (Track::Arm, "#90EE90"),     // 浅绿色
-                    "head" => (Track::Head, "#FFB366"),   // 浅橙色
-                    "waist" => (Track::Waist, "#DDA0DD"), // 浅紫色
-                    _ => continue,                        // 跳过未知类型
+                    "arm" => (Track::Arm, "#90EE90"),                          // 浅绿色
+                    "gripper" => (Track::Custom("Gripper".into()), "#F0E68C"), // 卡其色
+                    "head" => (Track::Head, "#FFB366"),                        // 浅橙色
+                    "waist" => (Track::Waist, "#DDA0DD"),                      // 浅紫色
+                    _ => continue,                                             // 跳过未知类型
                 };
 
                 let op_event = TimelineEvent {
@@ -430,6 +442,9 @@ pub fn run_analysis(input_file: &str, output_dir: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use analyzer_core::timeline::Track;
+
+    use crate::models::{CycleType, NavigationFlow, Round};
 
     #[test]
     fn test_plugin_metadata() {
@@ -441,5 +456,47 @@ mod tests {
                 .iter()
                 .any(|ext| ext.as_str() == ".log")
         );
+    }
+
+    #[test]
+    fn gripper_operation_uses_custom_timeline_track() {
+        let rounds = vec![Round {
+            id: 1,
+            loop_number: Some(1),
+            cycle_type: CycleType::Normal(1),
+            layer_index: 0,
+            start_ts: 0.0,
+            end_ts: Some(10.0),
+            pose0: None,
+            pose6: None,
+            pause_events: Vec::new(),
+        }];
+
+        let flows = vec![NavigationFlow {
+            nav_start_ts: None,
+            nav_end_ts: None,
+            nav_target_pos: None,
+            nav_target_ori: None,
+            nav_status: "ok".to_string(),
+            nav_sub_steps: Vec::new(),
+            round_id: 1,
+            operations: vec![ActionOperation {
+                action_type: "gripper".to_string(),
+                action_code: None,
+                label: "gripper(right,open_mode=1,effective_open=true)".to_string(),
+                start_ts: Some(1.0),
+                end_ts: Some(2.0),
+                status: "ok".to_string(),
+                sub_steps: Vec::new(),
+                pause_events: Vec::new(),
+            }],
+        }];
+
+        let timeline =
+            build_timeline("test.log", &rounds, &flows, 0.0, 10.0).expect("timeline should build");
+
+        assert!(timeline.events.iter().any(|event| {
+            matches!(&event.track, Track::Custom(name) if name.as_str() == "Gripper")
+        }));
     }
 }

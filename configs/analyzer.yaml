@@ -116,8 +116,9 @@ multi_file:
     RoundMarker: 0
     Navigation: 1
     Arm: 2
-    Head: 3
-    Waist: 4
+    Gripper: 3
+    Head: 4
+    Waist: 5
 
 # 工作流配置
 workflow:

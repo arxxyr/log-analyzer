@@ -13,6 +13,10 @@ track.arm:
   zh-CN: "机械臂"
   en: "Arm"
 
+track.gripper:
+  zh-CN: "夹爪"
+  en: "Gripper"
+
 track.head:
   zh-CN: "头部"
   en: "Head"

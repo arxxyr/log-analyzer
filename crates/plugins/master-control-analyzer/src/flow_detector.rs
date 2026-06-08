@@ -209,14 +209,37 @@ static GRIPPER_DONE_REGEX: LazyLock<Regex> = LazyLock::new(|| {
 // 手臂动作子阶段正则（BehaviorTreeNode 内部）
 // ============================================================
 
-/// gripper start arm=xxx open=xxx
+/// gripper start arm=xxx open=xxx（旧格式）或
+/// gripper start arm=xxx open_mode=N(...) effective_open=xxx（新格式）
 static GRIPPER_START_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"gripper start arm=(\w+) open=(\w+)").expect("invalid regex: GRIPPER_START_REGEX")
+    Regex::new(
+        r"gripper start arm=(?P<arm>\w+)\s+(?:open=(?P<open>\w+)|open_mode=(?P<open_mode>\d+)(?:\([^)]+\))?\s+effective_open=(?P<effective_open>\w+))",
+    )
+    .expect("invalid regex: GRIPPER_START_REGEX")
 });
 /// gripper request: cmd_code=xxx arm=xxx
 static GRIPPER_REQUEST_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"gripper request: cmd_code=(\d+) arm=(\w+)")
         .expect("invalid regex: GRIPPER_REQUEST_REGEX")
+});
+/// gripper request: service=xxx payload={...}
+static GRIPPER_SERVICE_REQUEST_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"gripper request:\s+service=(.+)")
+        .expect("invalid regex: GRIPPER_SERVICE_REQUEST_REGEX")
+});
+/// gripper async_request_sent ...
+static GRIPPER_ASYNC_SENT_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"gripper async_request_sent\s+(.+)")
+        .expect("invalid regex: GRIPPER_ASYNC_SENT_REGEX")
+});
+/// gripper service_not_ready ...
+static GRIPPER_SERVICE_NOT_READY_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"gripper service_not_ready\s+(.+)")
+        .expect("invalid regex: GRIPPER_SERVICE_NOT_READY_REGEX")
+});
+/// gripper response: ...
+static GRIPPER_RESPONSE_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"gripper response:\s*(.+)").expect("invalid regex: GRIPPER_RESPONSE_REGEX")
 });
 /// ArmObstacle start cmd=xxx
 static ARM_OBSTACLE_START_REGEX: LazyLock<Regex> = LazyLock::new(|| {
@@ -351,6 +374,34 @@ fn new_action(
     }
 }
 
+fn normalize_gripper_done_status(status: &str) -> String {
+    match status {
+        "success" | "ok" => "ok".to_string(),
+        other => format!("failed_{}", other),
+    }
+}
+
+fn is_gripper_failure_response(detail: &str) -> bool {
+    if detail.contains("service_unavailable")
+        || detail.contains("call_timeout")
+        || detail.contains("empty_response")
+        || detail.contains("response_exception")
+        || detail.contains("call_failed")
+    {
+        return true;
+    }
+
+    if let Some(status_pos) = detail.find("status=") {
+        let status = detail[status_pos + "status=".len()..]
+            .split_whitespace()
+            .next()
+            .unwrap_or("");
+        return status != "0";
+    }
+
+    false
+}
+
 /// 检测日志中的导航流程和动作操作
 ///
 /// 支持的日志格式：
@@ -405,6 +456,10 @@ pub fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<Navigatio
 
     let gripper_start_regex = &*GRIPPER_START_REGEX;
     let gripper_request_regex = &*GRIPPER_REQUEST_REGEX;
+    let gripper_service_request_regex = &*GRIPPER_SERVICE_REQUEST_REGEX;
+    let gripper_async_sent_regex = &*GRIPPER_ASYNC_SENT_REGEX;
+    let gripper_service_not_ready_regex = &*GRIPPER_SERVICE_NOT_READY_REGEX;
+    let gripper_response_regex = &*GRIPPER_RESPONSE_REGEX;
     let arm_obstacle_start_regex = &*ARM_OBSTACLE_START_REGEX;
     let arm_obstacle_done_regex = &*ARM_OBSTACLE_DONE_REGEX;
     let arm_transition_start_regex = &*ARM_TRANSITION_START_REGEX;
@@ -547,15 +602,28 @@ pub fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<Navigatio
 
         // gripper 开始
         if let Some(caps) = gripper_start_regex.captures(&line.line) {
-            let arm = caps[1].to_string();
-            let open = caps[2].to_string();
+            let arm = caps
+                .name("arm")
+                .map(|m| m.as_str())
+                .unwrap_or("unknown")
+                .to_string();
+            let mode_label = if let Some(open) = caps.name("open") {
+                format!("open={}", open.as_str())
+            } else {
+                let open_mode = caps.name("open_mode").map(|m| m.as_str()).unwrap_or("?");
+                let effective_open = caps
+                    .name("effective_open")
+                    .map(|m| m.as_str())
+                    .unwrap_or("?");
+                format!("open_mode={},effective_open={}", open_mode, effective_open)
+            };
             if let Some(ref mut ctx) = active_bt_node {
                 ctx.sub_actions.push(new_action(
                     "gripper",
                     None,
-                    format!("gripper({},{})", arm, open),
+                    format!("gripper({},{})", arm, mode_label),
                     line.timestamp,
-                    format!("gripper start arm={} open={}", arm, open),
+                    format!("gripper start arm={} {}", arm, mode_label),
                 ));
             }
             continue;
@@ -575,6 +643,62 @@ pub fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<Navigatio
             continue;
         }
 
+        // gripper 服务请求详情
+        if let Some(caps) = gripper_service_request_regex.captures(&line.line) {
+            let detail = caps[1].to_string();
+            let ts = line.timestamp;
+            update_bt_subaction(&mut active_bt_node, "gripper", |action| {
+                action.sub_steps.push(SubStep {
+                    name: format!("gripper request service={}", detail),
+                    timestamp: ts,
+                });
+            });
+            continue;
+        }
+
+        // gripper 异步请求已发送
+        if let Some(caps) = gripper_async_sent_regex.captures(&line.line) {
+            let detail = caps[1].to_string();
+            let ts = line.timestamp;
+            update_bt_subaction(&mut active_bt_node, "gripper", |action| {
+                action.sub_steps.push(SubStep {
+                    name: format!("gripper async_request_sent {}", detail),
+                    timestamp: ts,
+                });
+            });
+            continue;
+        }
+
+        // gripper 服务未就绪
+        if let Some(caps) = gripper_service_not_ready_regex.captures(&line.line) {
+            let detail = caps[1].to_string();
+            let ts = line.timestamp;
+            update_bt_subaction(&mut active_bt_node, "gripper", |action| {
+                action.sub_steps.push(SubStep {
+                    name: format!("gripper service_not_ready {}", detail),
+                    timestamp: ts,
+                });
+            });
+            continue;
+        }
+
+        // gripper 服务响应或失败响应
+        if let Some(caps) = gripper_response_regex.captures(&line.line) {
+            let detail = caps[1].to_string();
+            let ts = line.timestamp;
+            update_bt_subaction(&mut active_bt_node, "gripper", |action| {
+                action.sub_steps.push(SubStep {
+                    name: format!("gripper response: {}", detail),
+                    timestamp: ts,
+                });
+                if is_gripper_failure_response(&detail) {
+                    action.end_ts = Some(ts);
+                    action.status = "failed_response".to_string();
+                }
+            });
+            continue;
+        }
+
         // gripper 完成
         if let Some(caps) = gripper_done_regex.captures(&line.line) {
             let status = caps[1].to_string();
@@ -586,7 +710,7 @@ pub fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<Navigatio
                     timestamp: ts,
                 });
                 action.end_ts = Some(ts);
-                action.status = status.clone();
+                action.status = normalize_gripper_done_status(&status);
             });
             continue;
         }
@@ -1321,4 +1445,88 @@ pub fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<Navigatio
     }
 
     Ok(flows)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::{CycleType, Round};
+
+    fn line(timestamp: f64, text: &str) -> LogLine {
+        LogLine {
+            timestamp,
+            line: text.to_string(),
+        }
+    }
+
+    fn rounds() -> Vec<Round> {
+        vec![Round {
+            id: 1,
+            loop_number: Some(1),
+            cycle_type: CycleType::Normal(1),
+            layer_index: 0,
+            start_ts: 0.0,
+            end_ts: Some(10.0),
+            pose0: None,
+            pose6: None,
+            pause_events: Vec::new(),
+        }]
+    }
+
+    fn detect_gripper(start_line: &str, done_line: &str) -> ActionOperation {
+        let lines = vec![
+            line(1.0, "========== BehaviorTree 节点开始 =========="),
+            line(1.1, "节点ID: test_gripper"),
+            line(1.2, start_line),
+            line(1.3, "gripper request: cmd_code=1 arm=right"),
+            line(1.4, done_line),
+            line(1.5, "========== BehaviorTree 节点结束 =========="),
+            line(1.6, "结果: SUCCESS"),
+        ];
+
+        let flows = detect_flows(&lines, &rounds()).expect("detect flows");
+        flows
+            .iter()
+            .flat_map(|flow| flow.operations.iter())
+            .find(|op| op.action_type == "gripper")
+            .cloned()
+            .expect("gripper operation")
+    }
+
+    #[test]
+    fn detects_legacy_gripper_start_format() {
+        let gripper = detect_gripper(
+            "gripper start arm=right open=true mode=service service=/marvin/gripper_control",
+            "gripper done status=success cost_ms=200",
+        );
+
+        assert_eq!(gripper.label, "gripper(right,open=true)");
+        assert_eq!(gripper.status, "ok");
+        assert!(gripper.end_ts.is_some());
+    }
+
+    #[test]
+    fn detects_current_gripper_start_format() {
+        let gripper = detect_gripper(
+            "gripper start arm=right open_mode=1(open) effective_open=true cached_state=unknown mode=service service=/marvin/gripper_control left_topic=/left right_topic=/right",
+            "gripper done status=success cost_ms=200",
+        );
+
+        assert_eq!(
+            gripper.label,
+            "gripper(right,open_mode=1,effective_open=true)"
+        );
+        assert_eq!(gripper.status, "ok");
+        assert!(gripper.end_ts.is_some());
+    }
+
+    #[test]
+    fn normalizes_gripper_done_failure_status() {
+        let gripper = detect_gripper(
+            "gripper start arm=right open=false mode=service service=/marvin/gripper_control",
+            "gripper done status=failure cost_ms=200",
+        );
+
+        assert_eq!(gripper.status, "failed_failure");
+    }
 }

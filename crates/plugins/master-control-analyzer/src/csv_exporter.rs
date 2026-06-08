@@ -15,6 +15,7 @@ fn action_type_to_display(action_type: &str) -> String {
         "arm" => t!("action.arm").to_string(),
         "head" => t!("action.head").to_string(),
         "waist" => t!("action.waist").to_string(),
+        "gripper" => t!("action.gripper").to_string(),
         "preplan" => t!("action.preplan").to_string(),
         _ => action_type.to_string(),
     }
@@ -30,6 +31,7 @@ fn build_action_label(operation: &ActionOperation) -> String {
             operation.label,
             operation.action_code.unwrap_or(0)
         ),
+        "gripper" => operation.label.clone(),
         "head" => t!("label.head_control").to_string(),
         "waist" => t!("label.waist_control").to_string(),
         "preplan" => operation.label.clone(),
@@ -391,6 +393,7 @@ pub fn generate_action_timeline_csv(
     // 动态获取本地化的动作类型名称用于过滤
     let nav_label = t!("action.navigation").to_string();
     let arm_label = t!("action.arm").to_string();
+    let gripper_label = t!("action.gripper").to_string();
     let head_label = t!("action.head").to_string();
     let waist_label = t!("action.waist").to_string();
 
@@ -401,6 +404,10 @@ pub fn generate_action_timeline_csv(
     let arm_count = all_actions
         .iter()
         .filter(|a| a.action_type == arm_label)
+        .count();
+    let gripper_count = all_actions
+        .iter()
+        .filter(|a| a.action_type == gripper_label)
         .count();
     let head_count = all_actions
         .iter()
@@ -418,6 +425,7 @@ pub fn generate_action_timeline_csv(
         {}\n\
         {}\n\
         {}\n\n\
+        {}\n\
         {}\n\
         {}\n\
         {}\n\
@@ -452,6 +460,7 @@ pub fn generate_action_timeline_csv(
         t!("timeline_stats.by_type"),
         t!("timeline_stats.nav_count", count = nav_count),
         t!("timeline_stats.arm_count", count = arm_count),
+        t!("timeline_stats.gripper_count", count = gripper_count),
         t!("timeline_stats.head_count", count = head_count),
         t!("timeline_stats.waist_count", count = waist_count),
     );

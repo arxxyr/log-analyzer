@@ -72,13 +72,15 @@ impl Default for VisualizationConfig {
         track_priority.insert("RoundMarker".to_string(), 0);
         track_priority.insert("Navigation".to_string(), 1);
         track_priority.insert("Arm".to_string(), 2);
-        track_priority.insert("Head".to_string(), 3);
-        track_priority.insert("Waist".to_string(), 4);
+        track_priority.insert("Gripper".to_string(), 3);
+        track_priority.insert("Head".to_string(), 4);
+        track_priority.insert("Waist".to_string(), 5);
 
         let mut track_colors = HashMap::new();
         track_colors.insert("RoundMarker".to_string(), "#E8F4F8".to_string());
         track_colors.insert("Navigation".to_string(), "#ADD8E6".to_string());
         track_colors.insert("Arm".to_string(), "#90EE90".to_string());
+        track_colors.insert("Gripper".to_string(), "#F0E68C".to_string());
         track_colors.insert("Head".to_string(), "#FFB366".to_string());
         track_colors.insert("Waist".to_string(), "#DDA0DD".to_string());
 
@@ -302,6 +304,7 @@ impl GanttChartGenerator {
                 // 自定义泳道的名称映射
                 match name.as_str() {
                     "PrePlanNavigation" => t!("track.preplan").to_string(),
+                    "Gripper" => t!("track.gripper").to_string(),
                     _ => name.to_string(),
                 }
             }
@@ -371,17 +374,25 @@ mod tests {
             create_test_event("e1", Track::RoundMarker, 0.0, Some(10.0), "master_control"),
             create_test_event("e2", Track::Navigation, 1.0, Some(3.0), "master_control"),
             create_test_event("e3", Track::Arm, 3.5, Some(6.0), "external_arm"),
-            create_test_event("e4", Track::Head, 7.0, Some(8.0), "master_control"),
+            create_test_event(
+                "e4",
+                Track::Custom("Gripper".into()),
+                6.2,
+                Some(6.8),
+                "master_control",
+            ),
+            create_test_event("e5", Track::Head, 7.0, Some(8.0), "master_control"),
         ];
 
         let mut source_stats = HashMap::new();
-        source_stats.insert("master_control".to_string(), 3);
+        source_stats.insert("master_control".to_string(), 4);
         source_stats.insert("external_arm".to_string(), 1);
 
         let mut track_stats = HashMap::new();
         track_stats.insert("RoundMarker".to_string(), 1);
         track_stats.insert("Navigation".to_string(), 1);
         track_stats.insert("Arm".to_string(), 1);
+        track_stats.insert("Gripper".to_string(), 1);
         track_stats.insert("Head".to_string(), 1);
 
         let primary_timeline = Timeline {
@@ -410,9 +421,13 @@ mod tests {
 
         let grouped = generator.group_events_by_track(&merged.events);
 
-        assert_eq!(grouped.len(), 4); // RoundMarker, Navigation, Arm, Head
+        assert_eq!(grouped.len(), 5); // RoundMarker, Navigation, Arm, Gripper, Head
         assert_eq!(grouped[0].1.len(), 1); // RoundMarker has 1 event
         assert_eq!(grouped[1].1.len(), 1); // Navigation has 1 event
+        assert!(matches!(
+            &grouped[3].0,
+            Track::Custom(name) if name.as_str() == "Gripper"
+        ));
     }
 
     #[test]
@@ -423,11 +438,13 @@ mod tests {
         let round_marker_name = generator.track_name_to_string(&Track::RoundMarker);
         let nav_name = generator.track_name_to_string(&Track::Navigation);
         let arm_name = generator.track_name_to_string(&Track::Arm);
+        let gripper_name = generator.track_name_to_string(&Track::Custom("Gripper".into()));
 
         // 确保返回非空字符串
         assert!(!round_marker_name.is_empty());
         assert!(!nav_name.is_empty());
         assert!(!arm_name.is_empty());
+        assert!(!gripper_name.is_empty());
     }
 
     #[test]
