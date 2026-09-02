@@ -210,9 +210,7 @@ log-analyzer/
 │   └── deploy-windows.ps1        # Windows 部署脚本
 └── docs/
     ├── PLUGIN_ARCHITECTURE.md    # 插件开发文档
-    ├── WORKFLOW_ARCHITECTURE.md  # 工作流架构文档
-    ├── FONT_EMBEDDING.md         # （已过时）v0.4.0 前的字体嵌入方案
-    └── TUI_GUIDE.md              # （已过时）TUI 模块已于 v0.4.0 移除
+    └── WORKFLOW_ARCHITECTURE.md  # 工作流架构文档
 ```
 
 ## 内置插件
