@@ -34,7 +34,7 @@ use regex::Regex;
 use rust_i18n::t;
 
 use crate::models::{ActionOperation, LogLine, NavigationFlow, PauseEvent, Round, SubStep};
-use crate::round_detector::ts_to_round_id;
+use crate::round_detector::{is_log_node_registration, ts_to_round_id};
 
 // ============================================================
 // 新格式正则（ROS2ActionAdapter）
@@ -483,6 +483,12 @@ pub fn detect_flows(lines: &[LogLine], rounds: &[Round]) -> Result<Vec<Navigatio
     let mut ready_pose_phase: Option<(f64, u32)> = None; // (start_ts, count)
 
     for (line_idx, line) in lines.iter().enumerate() {
+        // 跳过 LogNode 模板注册行：模板 message 为自由文本，
+        // 可能与任意真实事件文本相同（详见 round_detector 模块注释）
+        if is_log_node_registration(&line.line) {
+            continue;
+        }
+
         // ============================================================
         // BehaviorTree 节点格式检测（最新格式）
         // ============================================================

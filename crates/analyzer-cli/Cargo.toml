@@ -41,6 +41,9 @@ serde_yaml_ng = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 
+# 时间处理（日志时间戳固定 UTC+8）
+chrono = { workspace = true }
+
 # 内存分配器
 mimalloc = { workspace = true }
 

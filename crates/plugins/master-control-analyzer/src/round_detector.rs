@@ -2,11 +2,12 @@
 //!
 //! 本模块负责从日志中检测任务轮次
 //!
-//! 日志格式（同时兼容新旧两种）：
+//! 日志格式（兼容多代格式）：
 //! - 初始循环开始:
 //!   - 新: `[初始循环] ===== 初始填充开始，已上件工位数 N =====`
 //!   - 旧: `[初始循环] ===== 初始循环开始（气密设备为空）=====`
 //! - 初始循环完成:
+//!   - 最新: `[初始循环] 初始循环结束，扫码成功=true, 气密位状态=N`
 //!   - 新: `[初始循环] 初始填充完成，已上件工位数 N`
 //!   - 旧: `[初始循环] 初始循环完成，气密设备中有工件`
 //! - 常规循环开始:
@@ -17,11 +18,16 @@
 //!   - 新: `[收尾前校正] ...`
 //!   - 旧: `[最终循环] 最终循环：取出气密工件并放置`
 //! - 收尾/最终循环完成:
+//!   - 最新: `[收尾循环] 最终循环完成`
 //!   - 新: `[收尾循环] 双工位收尾完成`
 //!   - 旧: `[最终循环] 最终循环完成`
 //!
-//! 注意：LogNode 节点注册时会在 log_node.cpp:39 输出一行包含模板字符串（含
-//! `{variable}` 占位符）的日志，正则通过强制要求 `\d+` 等具体值来避免误匹配。
+//! 注意：LogNode 节点注册时会在 log_node.cpp:39 输出一行
+//! `LogNode[xxx] - 初始化完成: level='...', message='...'` 形式的模板日志。
+//! 最新格式中部分模板不含 `{variable}` 占位符（如 `[收尾循环] 最终循环完成`），
+//! 与真实事件文本完全相同，无法靠内容正则区分，因此统一用
+//! [`LOG_NODE_REGISTRATION_REGEX`] 在检测前跳过整行；含占位符的旧模板
+//! 仍额外通过强制要求 `\d+` 等具体值来双重防护。
 
 use std::sync::LazyLock;
 
@@ -36,6 +42,20 @@ use crate::models::{CycleType, LogLine, PauseEvent, Round};
 // `{variable}` 占位符（那一行与真实事件长得像，但 `log_node.cpp:39`，
 // 真实事件在 `log_node.cpp:62`）。
 
+/// LogNode 模板注册行: `LogNode[xxx] - 初始化完成: level='...', message='...'`
+///
+/// 最新格式中部分模板正文不含占位符，与真实事件文本一字不差，
+/// 必须在进入任何事件检测前跳过整行。
+static LOG_NODE_REGISTRATION_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"LogNode\[[^\]]+\]\s*-\s*初始化完成:")
+        .expect("invalid regex: LOG_NODE_REGISTRATION_REGEX")
+});
+
+/// 判断是否为 LogNode 模板注册行（非真实事件，检测时应整行跳过）
+pub(crate) fn is_log_node_registration(line: &str) -> bool {
+    LOG_NODE_REGISTRATION_REGEX.is_match(line)
+}
+
 /// 初始循环开始（新旧格式并存）
 static INIT_START_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
@@ -44,10 +64,14 @@ static INIT_START_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     .expect("invalid regex: INIT_START_REGEX")
 });
 
-/// 初始循环完成（新旧格式并存）
+/// 初始循环完成（多代格式并存）:
+///   - 最新: `[初始循环] 初始循环结束，扫码成功=true, 气密位状态=N`
+///     （要求 `扫码成功=` 后跟具体布尔值，避开模板行的 `{init_3001_success}` 占位符）
+///   - 新: `[初始循环] 初始填充完成，已上件工位数 N`
+///   - 旧: `[初始循环] 初始循环完成，气密设备中有工件`
 static INIT_END_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
-        r"\[初始循环\]\s*(?:初始填充完成，已上件工位数\s+\d+|初始循环完成，气密设备中有工件)",
+        r"\[初始循环\]\s*(?:初始循环结束，扫码成功=(?:true|false)|初始填充完成，已上件工位数\s+\d+|初始循环完成，气密设备中有工件)",
     )
     .expect("invalid regex: INIT_END_REGEX")
 });
@@ -83,10 +107,12 @@ static FINAL_START_REGEX: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 /// 收尾/最终循环完成:
+///   - 最新: `[收尾循环] 最终循环完成`
+///     （模板注册行含一字不差的同文，依赖 [`is_log_node_registration`] 前置过滤）
 ///   - 新: `[收尾循环] 双工位收尾完成`
 ///   - 旧: `[最终循环] 最终循环完成`
 static FINAL_END_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"\[收尾循环\]\s*双工位收尾完成|\[最终循环\]\s*最终循环完成")
+    Regex::new(r"\[收尾循环\]\s*(?:双工位收尾完成|最终循环完成)|\[最终循环\]\s*最终循环完成")
         .expect("invalid regex: FINAL_END_REGEX")
 });
 
@@ -209,6 +235,11 @@ pub fn detect_rounds(lines: &[LogLine], t_last: f64) -> Result<Vec<Round>> {
     let mut pending_user_pause_ts: Option<f64> = None; // 待匹配恢复的用户暂停时间戳（模式4）
 
     for line in lines {
+        // 跳过 LogNode 模板注册行：其 message 与真实事件文本可能一字不差
+        if is_log_node_registration(&line.line) {
+            continue;
+        }
+
         // 检测初始循环开始
         if init_start_regex.is_match(&line.line) {
             finalize_current_round(&mut current, &mut rounds, line.timestamp);
@@ -402,4 +433,130 @@ pub fn ts_to_round_id(ts: f64, rounds: &[Round]) -> usize {
                 .map(|r| r.id)
         })
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 真实日志行前缀（log_node.cpp:62 为真实事件，:39 为模板注册）
+    fn event(timestamp: f64, text: &str) -> LogLine {
+        LogLine {
+            timestamp,
+            line: format!(
+                "2026-09-01 11:29:58.036536 [master_control] [0xD9C957DE] [INFO] [log_node.cpp:62] - {}",
+                text
+            ),
+        }
+    }
+
+    /// LogNode 模板注册行（不是真实事件）
+    fn registration(timestamp: f64, node: &str, message: &str) -> LogLine {
+        LogLine {
+            timestamp,
+            line: format!(
+                "2026-09-01 11:16:01.211405 [master_control] [0x05069E01] [INFO] [log_node.cpp:39] - LogNode[{}] - 初始化完成: level='info', message='{}'",
+                node, message
+            ),
+        }
+    }
+
+    #[test]
+    fn detects_current_init_cycle_markers() {
+        let lines = vec![
+            event(0.0, "[初始循环] ===== 初始填充开始，已上件工位数 0 ====="),
+            event(60.0, "[初始循环] 初始循环结束，扫码成功=true, 气密位状态=2"),
+        ];
+
+        let rounds = detect_rounds(&lines, 60.0).expect("detect rounds");
+        assert_eq!(rounds.len(), 1);
+        assert_eq!(rounds[0].cycle_type, CycleType::Initial);
+        assert_eq!(rounds[0].end_ts, Some(60.0));
+    }
+
+    #[test]
+    fn detects_current_final_cycle_end_marker() {
+        let lines = vec![
+            event(0.0, "[收尾前校正] loaded_leak_station_count=2"),
+            event(30.0, "[收尾循环] 最终循环完成"),
+        ];
+
+        let rounds = detect_rounds(&lines, 30.0).expect("detect rounds");
+        assert_eq!(rounds.len(), 1);
+        assert_eq!(rounds[0].cycle_type, CycleType::Final);
+        assert_eq!(rounds[0].end_ts, Some(30.0));
+    }
+
+    #[test]
+    fn ignores_log_node_registration_lines() {
+        // 注册行的 message 与真实事件文本一字不差，必须整行跳过
+        let lines = vec![
+            registration(0.0, "log_final_complete", "[收尾循环] 最终循环完成"),
+            registration(
+                0.1,
+                "log_init_complete",
+                "[初始循环] 初始循环结束，扫码成功={init_3001_success}, 气密位状态={obj_in_leak_status}",
+            ),
+            registration(
+                0.2,
+                "loop_normal_start",
+                "[常规循环] 常规循环 {iteration}，目标工位 {current_leak_station}",
+            ),
+        ];
+
+        let rounds = detect_rounds(&lines, 0.2).expect("detect rounds");
+        assert!(
+            rounds.is_empty(),
+            "模板注册行不应产生轮次，实际得到 {} 个",
+            rounds.len()
+        );
+    }
+
+    #[test]
+    fn registration_line_does_not_close_real_round() {
+        // 真实轮次进行中出现同文注册行，不得被提前结束
+        let lines = vec![
+            event(0.0, "[常规循环] 常规循环 1，目标工位 1"),
+            registration(10.0, "log_final_complete", "[收尾循环] 最终循环完成"),
+            event(70.0, "[常规循环] 常规循环 1 放置完成"),
+        ];
+
+        let rounds = detect_rounds(&lines, 70.0).expect("detect rounds");
+        assert_eq!(rounds.len(), 1);
+        assert_eq!(rounds[0].cycle_type, CycleType::Normal(1));
+        assert_eq!(rounds[0].end_ts, Some(70.0));
+    }
+
+    #[test]
+    fn merges_duplicate_pause_detections_in_round() {
+        // 失败暂停同时触发 TaskGraphExecutor 与 ROS2ActionAdapter 两种模式
+        let lines = vec![
+            event(0.0, "[常规循环] 常规循环 1，目标工位 1"),
+            LogLine {
+                timestamp: 10.0,
+                line: "TaskGraphExecutor: 节点 normal_nav_to_put_direct 失败，进入失败暂停状态"
+                    .to_string(),
+            },
+            LogLine {
+                timestamp: 10.1,
+                line: "ROS2ActionAdapter[head_control] - 暂停".to_string(),
+            },
+            LogLine {
+                timestamp: 269.0,
+                line: "TaskGraphExecutor: 重试节点 normal_nav_to_put_direct".to_string(),
+            },
+            LogLine {
+                timestamp: 269.5,
+                line: "ROS2ActionAdapter[head_control] - 恢复".to_string(),
+            },
+            event(328.5, "[常规循环] 常规循环 1 放置完成"),
+        ];
+
+        let rounds = detect_rounds(&lines, 328.5).expect("detect rounds");
+        assert_eq!(rounds.len(), 1);
+        assert_eq!(rounds[0].pause_events.len(), 2);
+        // 两段重叠暂停合并后为 10.0..269.5，共 259.5 秒
+        assert!((rounds[0].total_pause_duration() - 259.5).abs() < 1e-9);
+        assert!((rounds[0].effective_duration() - 69.0).abs() < 1e-9);
+    }
 }

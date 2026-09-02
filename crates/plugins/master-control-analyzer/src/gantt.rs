@@ -11,32 +11,56 @@ use plotters::style::text_anchor::{HPos, Pos, VPos};
 use rust_i18n::t;
 
 use crate::font_loader::FontLoader;
-use crate::models::{NavigationFlow, PauseEvent, Round, SubStep};
+use crate::models::{NavigationFlow, PauseEvent, Round, SubStep, merge_intervals};
 use crate::utils::timestamp_to_beijing_time;
 
 /// 计算在指定时间点之前的累计暂停时间
 ///
-/// 用于压缩时间轴，删除暂停期间的空白时间
+/// 用于压缩时间轴，删除暂停期间的空白时间。
+/// 同一段暂停可能被多种检测模式重复记录，先合并重叠区间再累加，避免重复扣除。
 fn pause_time_before(pause_events: &[PauseEvent], round_start: f64, ts: f64) -> f64 {
-    pause_events
+    // 未恢复的暂停视为持续到 ts
+    let intervals = pause_events
         .iter()
-        .map(|e| {
-            let pause_start = e.pause_ts;
-            let pause_end = e.resume_ts.unwrap_or(ts);
+        .map(|e| (e.pause_ts, e.resume_ts.unwrap_or(ts)))
+        .collect();
 
+    merge_intervals(intervals)
+        .iter()
+        .map(|&(pause_start, pause_end)| {
             if ts <= pause_start {
                 // 时间点在暂停开始之前，不计算
                 0.0
             } else if ts >= pause_end {
                 // 时间点在暂停结束之后，计算完整暂停时间
-                (pause_end - pause_start).max(0.0)
+                pause_end - pause_start
             } else {
                 // 时间点在暂停期间，计算部分暂停时间
-                (ts - pause_start).max(0.0)
+                ts - pause_start
             }
         })
         .sum::<f64>()
         .min(ts - round_start) // 确保不超过总时间
+}
+
+/// 计算动作在压缩时间轴上的长度
+///
+/// 甘特图横轴已扣除暂停时间，若动作长度仍按墙钟计算，
+/// 跨越暂停的动作（如暂停期间挂起的 BT 节点）会冲出坐标轴，
+/// 把其余动作挤成无法辨认的细线。
+/// 因此起止两端都用同一套压缩映射，长度即两端压缩坐标之差。
+///
+/// `end_ts` 为 `None`（动作未完成）时给 1 秒占位，与原行为一致。
+fn compressed_duration(round: &Round, start_ts: f64, end_ts: Option<f64>) -> f64 {
+    let Some(end_ts) = end_ts else {
+        return 1.0;
+    };
+
+    let start_compressed =
+        start_ts - pause_time_before(&round.pause_events, round.start_ts, start_ts);
+    let end_compressed = end_ts - pause_time_before(&round.pause_events, round.start_ts, end_ts);
+
+    (end_compressed - start_compressed).max(0.0)
 }
 
 /// 动作类型配置（顺序、显示名称、颜色）
@@ -323,20 +347,8 @@ fn generate_round_gantt(
             let pause_before = pause_time_before(&round.pause_events, round.start_ts, nav_start_ts);
             let nav_start = (nav_start_ts - round.start_ts - pause_before).max(0.0);
 
-            // 查找 operations 中对应的 navigation 操作以获取暂停事件
-            let nav_op = flow
-                .operations
-                .iter()
-                .find(|op| op.action_type == "navigation");
-            let nav_duration = if let Some(op) = nav_op {
-                if op.pause_events.is_empty() {
-                    flow.nav_end_ts.map(|end| end - nav_start_ts).unwrap_or(1.0)
-                } else {
-                    op.effective_duration()
-                }
-            } else {
-                flow.nav_end_ts.map(|end| end - nav_start_ts).unwrap_or(1.0)
-            };
+            // 结束时间同样映射到压缩坐标系，保证跨暂停的动作不会冲出时间轴
+            let nav_duration = compressed_duration(round, nav_start_ts, flow.nav_end_ts);
 
             let label = format!("F{}-nav", flow_id);
             let detail_info = match flow.nav_target_pos.as_deref() {
@@ -369,12 +381,8 @@ fn generate_round_gantt(
                     pause_time_before(&round.pause_events, round.start_ts, op_start_ts);
                 let op_start = (op_start_ts - round.start_ts - pause_before).max(0.0);
 
-                // 使用有效持续时间（扣除暂停时间）
-                let op_duration = if operation.pause_events.is_empty() {
-                    operation.end_ts.map(|end| end - op_start_ts).unwrap_or(1.0)
-                } else {
-                    operation.effective_duration()
-                };
+                // 结束时间同样映射到压缩坐标系（扣除跨越的暂停时间）
+                let op_duration = compressed_duration(round, op_start_ts, operation.end_ts);
 
                 let (label, detail_info) = match operation.action_type.as_str() {
                     "arm" => {
@@ -494,7 +502,9 @@ fn generate_round_gantt(
     let root = BitMapBackend::new(&filename, (canvas_width, canvas_height)).into_drawing_area();
     root.fill(&WHITE)?;
 
-    let max_time = total_duration.max(
+    // 横轴用的是扣除暂停后的压缩坐标，上限也必须取有效时长；
+    // 若取墙钟总时长，有暂停的轮次右侧会拖出大片空白，动作全被挤到最左端
+    let max_time = effective_duration.max(
         chart_data
             .iter()
             .map(|(_, _, start, dur, _, _)| start + dur)

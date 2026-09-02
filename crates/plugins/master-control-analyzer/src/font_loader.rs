@@ -1,9 +1,14 @@
 //! 字体加载模块
 //!
-//! 三级字体选择策略：
+//! 分平台字体选择策略：
 //! 1. Windows: 根据系统语言选择中文或英文系统字体
-//! 2. Linux: 检测 CJK 字体，无则用英文并提示安装
-//! 3. 兜底: 使用英文字体
+//! 2. Linux: `fc-list`/`fc-match` 定位 CJK 字体文件并注册，无则用英文并提示安装
+//! 3. macOS: 按候选路径查找系统 CJK 字体文件并注册（PingFang 需在 AssetsV2 中动态查找）
+//! 4. 兜底: 使用英文字体
+//!
+//! Linux 与 macOS 都必须把字体**文件数据**注册进 plotters：
+//! 其 ab_glyph 后端只在自身注册表里按名字查字体，既不查 fontconfig
+//! 也不查 CoreText，只给字体名而不注册，渲染时一律报 `FontUnavailable`。
 
 use anyhow::Result;
 use plotters::style::FontDesc;
@@ -246,9 +251,10 @@ impl FontLoader {
 
     /// 读取字体文件并注册到 plotters
     ///
-    /// plotters 的 ab_glyph 后端无法通过字体名称查找字体文件，
+    /// plotters 的 ab_glyph 后端无法通过字体名称查找字体文件
+    /// （Linux 不走 fontconfig，macOS 不走 CoreText），
     /// 必须手动读取字体数据并通过 register_font 注册。
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn register_font_from_file(font_name: &str, font_path: &str) -> bool {
         use plotters::style::FontStyle;
         use plotters::style::register_font;
@@ -322,24 +328,111 @@ impl FontLoader {
         });
     }
 
+    /// macOS 候选 CJK 字体（显示名 → 候选文件路径，按优先级排列）
+    ///
+    /// plotters 只认注册进去的字体数据，字体名仅作为查表键，
+    /// 因此这里的“显示名”不必与系统字体名一致，只需与注册时一致。
+    #[cfg(target_os = "macos")]
+    const MACOS_CJK_FONTS: &'static [(&'static str, &'static [&'static str])] = &[
+        (
+            "Hiragino Sans GB",
+            &["/System/Library/Fonts/Hiragino Sans GB.ttc"],
+        ),
+        (
+            "STHeiti",
+            &[
+                "/System/Library/Fonts/STHeiti Medium.ttc",
+                "/System/Library/Fonts/STHeiti Light.ttc",
+            ],
+        ),
+        (
+            "Songti SC",
+            &["/System/Library/Fonts/Supplemental/Songti.ttc"],
+        ),
+        (
+            "Arial Unicode MS",
+            &["/System/Library/Fonts/Supplemental/Arial Unicode.ttf"],
+        ),
+    ];
+
+    /// macOS 候选英文字体（显示名 → 候选文件路径）
+    #[cfg(target_os = "macos")]
+    const MACOS_LATIN_FONTS: &'static [(&'static str, &'static [&'static str])] = &[
+        (
+            "Helvetica Neue",
+            &["/System/Library/Fonts/HelveticaNeue.ttc"],
+        ),
+        ("Helvetica", &["/System/Library/Fonts/Helvetica.ttc"]),
+        ("Arial", &["/System/Library/Fonts/Supplemental/Arial.ttf"]),
+    ];
+
     /// macOS 字体检测
+    ///
+    /// 与 Linux 同理：ab_glyph 不查询 CoreText，只按名字在自身注册表里找，
+    /// 因此必须先把字体文件读进来 `register_font` 注册，否则渲染时
+    /// 一律报 `FontUnavailable`。
     #[cfg(target_os = "macos")]
     fn detect_macos_font() -> FontChoice {
-        // macOS 自带中文字体
-        let is_chinese = Self::is_macos_chinese_locale();
+        if Self::is_macos_chinese_locale() {
+            // PingFang 在新版 macOS 上位于带哈希的 AssetsV2 目录，需动态查找
+            if let Some(path) = Self::find_macos_pingfang()
+                && Self::register_font_from_file("PingFang SC", &path)
+            {
+                eprintln!("[字体] macOS 注册 CJK 字体: PingFang SC ({})", path);
+                return FontChoice::Chinese("PingFang SC".to_string());
+            }
 
-        if is_chinese {
-            // macOS 中文字体
-            let chinese_fonts = ["PingFang SC", "Hiragino Sans GB", "STHeiti", "Heiti SC"];
+            for (font_name, paths) in Self::MACOS_CJK_FONTS {
+                for path in *paths {
+                    if std::path::Path::new(path).exists()
+                        && Self::register_font_from_file(font_name, path)
+                    {
+                        eprintln!("[字体] macOS 注册 CJK 字体: {} ({})", font_name, path);
+                        return FontChoice::Chinese(font_name.to_string());
+                    }
+                }
+            }
 
-            if let Some(font) = chinese_fonts.first() {
-                eprintln!("[字体] macOS 中文环境，使用: {}", font);
-                return FontChoice::Chinese(font.to_string());
+            eprintln!("[字体] macOS 中文环境但未能注册任何 CJK 字体，回退到英文字体");
+        }
+
+        for (font_name, paths) in Self::MACOS_LATIN_FONTS {
+            for path in *paths {
+                if std::path::Path::new(path).exists()
+                    && Self::register_font_from_file(font_name, path)
+                {
+                    eprintln!("[字体] macOS 注册英文字体: {} ({})", font_name, path);
+                    return FontChoice::English(font_name.to_string());
+                }
             }
         }
 
-        eprintln!("[字体] macOS 英文环境，使用系统字体");
-        FontChoice::English("Helvetica Neue".to_string())
+        eprintln!("[字体] macOS 使用兜底字体: sans-serif");
+        FontChoice::English("sans-serif".to_string())
+    }
+
+    /// 查找 PingFang.ttc
+    ///
+    /// macOS 15+ 把 PingFang 挪进了 `/System/Library/AssetsV2/` 下带哈希的资产目录，
+    /// 老路径 `/System/Library/Fonts/PingFang.ttc` 在新系统上不存在，故两处都找。
+    #[cfg(target_os = "macos")]
+    fn find_macos_pingfang() -> Option<String> {
+        const LEGACY_PATH: &str = "/System/Library/Fonts/PingFang.ttc";
+        if std::path::Path::new(LEGACY_PATH).exists() {
+            return Some(LEGACY_PATH.to_string());
+        }
+
+        // AssetsV2 布局：<资产根>/<哈希>.asset/AssetData/PingFang.ttc
+        const ASSET_ROOT: &str = "/System/Library/AssetsV2/com_apple_MobileAsset_Font8";
+        let entries = std::fs::read_dir(ASSET_ROOT).ok()?;
+        for entry in entries.flatten() {
+            let candidate = entry.path().join("AssetData").join("PingFang.ttc");
+            if candidate.is_file() {
+                return candidate.to_str().map(str::to_string);
+            }
+        }
+
+        None
     }
 
     /// 检测 macOS 是否为中文环境
@@ -432,6 +525,9 @@ impl FontLoader {
         };
 
         if !Self::verify_font_with_plotters(font_name) {
+            // macOS/Windows 自带 CJK 字体，渲染失败通常是注册环节出问题，
+            // 提示安装字体只会误导，故按平台给不同建议
+            #[cfg(target_os = "linux")]
             anyhow::bail!(
                 "字体 '{}' 无法渲染。请安装 CJK 字体:\n\
                  \n\
@@ -439,6 +535,12 @@ impl FontLoader {
                  Fedora/RHEL:   sudo dnf install google-noto-sans-cjk-fonts\n\
                  Arch Linux:    sudo pacman -S noto-fonts-cjk\n\
                  Alpine:        apk add font-noto-cjk",
+                font_name
+            );
+
+            #[cfg(not(target_os = "linux"))]
+            anyhow::bail!(
+                "字体 '{}' 无法渲染：系统字体文件未能注册到 plotters。",
                 font_name
             );
         }

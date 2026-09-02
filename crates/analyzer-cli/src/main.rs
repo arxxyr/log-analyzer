@@ -29,9 +29,23 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use tracing::{debug, error, info, warn};
 use tracing_subscriber::EnvFilter;
+use tracing_subscriber::fmt::format::Writer;
+use tracing_subscriber::fmt::time::FormatTime;
 
 /// 当前语言设置（全局，线程安全）
 static CURRENT_LOCALE: OnceLock<String> = OnceLock::new();
+
+/// 日志时间戳格式化器：固定 UTC+8（北京时间），不受系统时区影响
+struct Utc8Time;
+
+impl FormatTime for Utc8Time {
+    fn format_time(&self, w: &mut Writer<'_>) -> std::fmt::Result {
+        const UTC8_SECS: i32 = 8 * 3600;
+        let offset = chrono::FixedOffset::east_opt(UTC8_SECS).expect("UTC+8 偏移量恒有效");
+        let now = chrono::Utc::now().with_timezone(&offset);
+        write!(w, "{}", now.format("%Y-%m-%d %H:%M:%S%.6f %:z"))
+    }
+}
 
 /// 获取当前语言设置
 fn get_current_locale() -> String {
@@ -837,6 +851,7 @@ fn main() -> Result<()> {
         .with_env_filter(
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(log_level)),
         )
+        .with_timer(Utc8Time)
         .with_target(false)
         .with_level(true)
         .init();
