@@ -173,8 +173,7 @@ pub fn export_csv(records: &[CsvRecord], outdir: &str) -> Result<()> {
     }
 
     wtr.flush()?;
-    // 静默输出，避免在 TUI 模式下刷屏
-    // println!("CSV exported to {}/analysis.csv", outdir);
+    // 静默输出，避免刷屏；结果路径在分析结束时统一汇总
     Ok(())
 }
 
@@ -379,8 +378,7 @@ pub fn generate_action_timeline_csv(
     }
 
     wtr.flush()?;
-    // 静默输出，避免在 TUI 模式下刷屏
-    // println!("Action timeline exported to {}", file_path);
+    // 静默输出，避免刷屏；结果路径在分析结束时统一汇总
 
     // 生成简要统计
     let total_actions = all_actions.len();
@@ -466,8 +464,7 @@ pub fn generate_action_timeline_csv(
     );
 
     std::fs::write(&stats_path, stats_content)?;
-    // 静默输出，避免在 TUI 模式下刷屏
-    // println!("Action timeline stats exported to {}", stats_path);
+    // 静默输出，避免刷屏；结果路径在分析结束时统一汇总
 
     Ok(())
 }

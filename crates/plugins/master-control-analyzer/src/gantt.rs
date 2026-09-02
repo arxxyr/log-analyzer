@@ -638,9 +638,7 @@ fn generate_round_gantt(
         .draw()?;
     root.present()?;
 
-    // 不再输出每个甘特图的保存消息，避免在 TUI 模式下刷屏
-    // 改为在分析结束时汇总显示
-    // println!("Gantt chart saved: {}", filename);
+    // 单张甘特图不打印保存消息，避免刷屏；改为在分析结束时汇总显示
     Ok(())
 }
 
